@@ -56,8 +56,11 @@ else:
     db_host = os.environ.get("DB_HOST")
     db_port = os.environ.get("DB_PORT")
 
-safe_browsing_url = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
+scanner_token = os.environ.get("SCANNER_TOKEN")
+scanner_url = "https://beta.attachmentscanner.com/requests"
 safe_browsing_token = os.environ.get("SAFE_BROWSING_TOKEN")
+safe_browsing_url = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
+
 vision_image_size_limit = 4000000
 likelihood_name = ("UNKNOWN", "VERY UNLIKELY", "UNLIKELY", "POSSIBLE", "LIKELY", "VERY LIKELY")
 
@@ -110,10 +113,10 @@ def create_db_tables():
     db = connect_db()
     cur = db.cursor()
 
-    cur.execute("select * from information_schema.tables where table_name = 'msg_image_info'")
+    cur.execute("select * from information_schema.tables where table_name = 'msg_info'")
     if cur.fetchone():
-        cur.execute("drop table msg_image_info")
-    cur.execute("create table msg_image_info (chat_id int, msg_id int, user_name text, image_id text, msg_text text)")
+        cur.execute("drop table msg_info")
+    cur.execute("create table msg_info (chat_id int, msg_id int, user_name text, file_id text, msg_text text)")
 
     db.commit()
     db.close()
@@ -155,16 +158,20 @@ def check_document(bot, update):
     doc_id = doc.file_id
     doc_mime_type = doc.mime_type
     doc_size = doc.file_size
+    doc_file = bot.get_file(doc_id)
+    doc_path = doc_file.file_path
 
-    if doc_mime_type.startswith("image"):
-        if doc_size <= vision_image_size_limit:
-            image_name = random_string(20)
-            image = bot.get_file(doc_id)
-            image.download(image_name)
+    if not is_file_safe(bot, update, doc_path, "doc", file_id=doc_id):
+        if doc_mime_type.startswith("image"):
+            if doc_size <= vision_image_size_limit:
+                image_name = random_string(20)
+                image = bot.get_file(doc_id)
+                image.download(image_name)
 
-            is_image_safe(bot, update, image_name, "doc", image_id=doc_id)
-        else:
-            update.message.reply_text("This document of photo can't be checked as it is too large for me to process.")
+                is_image_safe(bot, update, image_name, "doc", image_id=doc_id)
+            else:
+                text = "This document of photo can't be checked as it is too large for me to process."
+                update.message.reply_text(text)
 
 
 # Checks for image
@@ -172,15 +179,18 @@ def check_image(bot, update):
     image = update.message.photo[-1]
     image_id = image.file_id
     image_size = image.file_size
+    image_file = bot.get_file(image_id)
+    image_path = image_file.file_path
 
-    if image_size <= vision_image_size_limit:
-        image_name = random_string(20)
-        image = bot.get_file(image_id)
-        image.download(image_name)
+    if not is_file_safe(bot, update, image_path, "doc", file_id=image_id):
+        if image_size <= vision_image_size_limit:
+            image_name = random_string(20)
+            image = bot.get_file(image_id)
+            image.download(image_name)
 
-        is_image_safe(bot, update, image_name, "img", image_id=image_id)
-    else:
-        update.message.reply_text("This photo can't be checked as it is too large for me to process.")
+            is_image_safe(bot, update, image_name, "img", image_id=image_id)
+        else:
+            update.message.reply_text("This photo can't be checked as it is too large for me to process.")
 
 
 # Checks for url
@@ -225,6 +235,58 @@ def check_url(bot, update):
         update.message.reply_text(err_msg)
 
 
+# Checks if a file is safe
+def is_file_safe(bot, update, url, file_type, file_id=None):
+    safe_file = True
+    chat_id = update.message.chat_id
+    chat_type = update.message.chat.type
+    msg_id = update.message.message_id
+    user_name = update.message.from_user.first_name
+
+    headers = {"Content-Type": "application/json", "Authorization": "bearer %s" % scanner_token}
+    json = {"url": url}
+    response = requests.post(url=scanner_url, headers=headers, json=json)
+
+    if response.status_code == 200:
+        results = response.json()
+
+        if "matches" in results and results["matches"]:
+            safe_file = False
+
+            if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
+                while True:
+                    try:
+                        db = connect_db()
+                        break
+                    except Exception:
+                        time.sleep(1)
+                        continue
+
+                cur = db.cursor()
+                cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, msg_text) values "
+                            "(%s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, file_id, None))
+                db.commit()
+                db.close()
+
+                if file_type == "doc":
+                    text = "{} sent a document but I deleted it as it contains threats".format(user_name)
+                else:
+                    text = "{} sent a photo but I deleted it as it contains threats".format(user_name)
+
+                keyboard = [[InlineKeyboardButton(text="Undo", callback_data="undo," + str(msg_id))]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                update.message.delete()
+                bot.send_message(chat_id, text, reply_markup=reply_markup)
+            elif chat_type == Chat.PRIVATE:
+                update.message.reply_text("I think this contains threats", quote=True)
+        else:
+            if chat_type == Chat.PRIVATE:
+                update.message.reply_text("I think this is safe", quote=True)
+
+    return safe_file
+
+
 # Checks if image is safe
 def is_image_safe(bot, update, image_name, image_type, image_id=None, image_url=None, msg_text=None):
     safe_image = True
@@ -254,7 +316,7 @@ def is_image_safe(bot, update, image_name, image_type, image_id=None, image_url=
                     continue
 
             cur = db.cursor()
-            cur.execute("insert into msg_image_info (chat_id, msg_id, user_name, image_id, msg_text) values "
+            cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, msg_text) values "
                         "(%s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, image_id, msg_text))
             db.commit()
             db.close()
@@ -300,6 +362,9 @@ def is_image_safe(bot, update, image_name, image_type, image_id=None, image_url=
             text = text.rstrip(", ") + "."
 
             update.message.reply_text(text, quote=True)
+    else:
+        if chat_type == Chat.PRIVATE:
+            update.message.reply_text("I think this photo is safe.", quote=True)
 
     return safe_image
 
@@ -338,7 +403,7 @@ def is_url_safe(bot, update, url, msg_text):
                         continue
 
                 cur = db.cursor()
-                cur.execute("insert into msg_image_info (chat_id, msg_id, user_name, image_id, msg_text) values "
+                cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, msg_text) values "
                             "(%s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, None, msg_text))
                 db.commit()
                 db.close()
@@ -352,6 +417,9 @@ def is_url_safe(bot, update, url, msg_text):
             elif chat_type == Chat.PRIVATE:
                 update.message.reply_text("%s\nThis link contains threats. I don't recommend you to click on it." % url,
                                           quote=True)
+        else:
+            if chat_type == Chat.PRIVATE:
+                update.message.reply_text("%s\nI think this link is safe." % url, quote=True)
 
     return safe_url
 
@@ -379,10 +447,10 @@ def inline_button(bot, update):
                 continue
 
         cur = db.cursor()
-        cur.execute("select user_name, image_id, msg_text from msg_image_info where chat_id = %s and msg_id = %s",
+        cur.execute("select user_name, file_id, msg_text from msg_info where chat_id = %s and msg_id = %s",
                     (chat_id, msg_id))
-        user_name, image_id, msg_text = cur.fetchone()
-        cur.execute("delete from msg_image_info where chat_id = %s and msg_id = %s", (chat_id, msg_id))
+        user_name, file_id, msg_text = cur.fetchone()
+        cur.execute("delete from msg_info where chat_id = %s and msg_id = %s", (chat_id, msg_id))
         db.commit()
         db.close()
 
@@ -391,11 +459,11 @@ def inline_button(bot, update):
 
         query.message.delete()
 
-        if image_id:
+        if file_id:
             try:
-                bot.send_document(chat_id, image_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
+                bot.send_document(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
             except TelegramError:
-                bot.send_photo(chat_id, image_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
+                bot.send_photo(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
         else:
             bot.send_message(chat_id, "%s sent this:\n%s" % (user_name, msg_text), reply_markup=reply_markup)
     elif task == "delete":
