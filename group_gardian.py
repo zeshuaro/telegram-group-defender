@@ -173,14 +173,10 @@ def check_document(bot, update):
     doc_file = bot.get_file(doc_id)
     doc_path = doc_file.file_path
 
-    if not is_file_safe(bot, update, doc_path, "doc", file_id=doc_id):
+    if is_file_safe(bot, update, doc_path, "doc", doc_id):
         if doc_mime_type.startswith("image"):
             if doc_size <= vision_image_size_limit:
-                image_name = random_string(20)
-                image = bot.get_file(doc_id)
-                image.download(image_name)
-
-                is_image_safe(bot, update, image_name, "doc", image_id=doc_id)
+                is_image_safe(bot, update, doc_path, "doc", image_id=doc_id)
             else:
                 text = "This document of photo can't be checked as it is too large for me to process."
                 update.message.reply_text(text)
@@ -194,13 +190,9 @@ def check_image(bot, update):
     image_file = bot.get_file(image_id)
     image_path = image_file.file_path
 
-    if not is_file_safe(bot, update, image_path, "doc", file_id=image_id):
+    if is_file_safe(bot, update, image_path, "img", image_id):
         if image_size <= vision_image_size_limit:
-            image_name = random_string(20)
-            image = bot.get_file(image_id)
-            image.download(image_name)
-
-            is_image_safe(bot, update, image_name, "img", image_id=image_id)
+            is_image_safe(bot, update, image_path, "img", image_id=image_id)
         else:
             update.message.reply_text("This photo can't be checked as it is too large for me to process.")
 
@@ -210,6 +202,7 @@ def check_url(bot, update):
     msg_deleted = False
     large_err = ""
     download_err = ""
+
     text = update.message.text
     chat_type = update.message.chat.type
     extractor = URLExtract()
@@ -218,29 +211,25 @@ def check_url(bot, update):
     for url in urls:
         mime_type = mimetypes.guess_type(url)[0]
 
-        if mime_type and mime_type.startswith("image"):
+        if not mime_type:
+            if not is_url_safe(bot, update, url, text) and chat_type in (Chat.GROUP, Chat.SUPERGROUP):
+                msg_deleted = True
+                break
+        elif mime_type.startswith("image"):
             response = requests.get(url)
 
             if response.status_code == 200:
                 if int(response.headers["content-length"]) <= vision_image_size_limit:
-                    image_name = random_string(20)
-                    with open(image_name, "wb") as f:
-                        f.write(response.content)
-
-                    if not is_image_safe(bot, update, image_name, "url", image_url=url, msg_text=text) and \
+                    if not is_image_safe(bot, update, url, "url", image_url=url, msg_text=text) and \
                                     chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                         msg_deleted = True
                         break
                 else:
-                    large_err = "Some of the links of photos in this message can't be checked as they are too large " \
-                                "for me to process."
+                    large_err = "Some of the photo links in this message are not checked as they are too large for " \
+                                "me to process."
             else:
-                download_err = "Some of the links of photos in this message can't be checked as I can't retrieve " \
+                download_err = "Some of the photo links in this message are not checked as I can't retrieve " \
                                "the photos."
-        else:
-            if not is_url_safe(bot, update, url, text) and chat_type in (Chat.GROUP, Chat.SUPERGROUP):
-                msg_deleted = True
-                break
 
     if not msg_deleted and (large_err or download_err):
         err_msg = large_err + " " + download_err
@@ -248,7 +237,7 @@ def check_url(bot, update):
 
 
 # Checks if a file is safe
-def is_file_safe(bot, update, url, file_type, file_id=None):
+def is_file_safe(bot, update, file_path, file_type, file_id):
     safe_file = True
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
@@ -256,7 +245,7 @@ def is_file_safe(bot, update, url, file_type, file_id=None):
     user_name = update.message.from_user.first_name
 
     headers = {"Content-Type": "application/json", "Authorization": "bearer %s" % scanner_token}
-    json = {"url": url}
+    json = {"url": file_path}
     response = requests.post(url=scanner_url, headers=headers, json=json)
 
     if response.status_code == 200:
@@ -290,28 +279,27 @@ def is_file_safe(bot, update, url, file_type, file_id=None):
 
                 update.message.delete()
                 bot.send_message(chat_id, text, reply_markup=reply_markup)
-            elif chat_type == Chat.PRIVATE:
-                update.message.reply_text("I think this contains threats", quote=True)
+            else:
+                update.message.reply_text("I think this contains threats. Don't download or open it.", quote=True)
         else:
             if chat_type == Chat.PRIVATE:
-                update.message.reply_text("I think this is safe", quote=True)
+                update.message.reply_text("I think this doesn't contain threats.", quote=True)
 
     return safe_file
 
 
-# Checks if image is safe
-def is_image_safe(bot, update, image_name, image_type, image_id=None, image_url=None, msg_text=None):
+# Checks if image's content is safe
+def is_image_safe(bot, update, image_path, image_type, image_id=None, image_url=None, msg_text=None):
     safe_image = True
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
     msg_id = update.message.message_id
     user_name = update.message.from_user.first_name
+
     client = vision.ImageAnnotatorClient()
-
-    with open(image_name, "rb") as f:
-        response = client.safe_search_detection(f)
-
-    os.remove(image_name)
+    image = vision.types.Image()
+    image.source.image_uri = image_path
+    response = client.safe_search_detection(image=image)
     safe = response.safe_search_annotation
     adult, spoof, medical, violence = safe.adult, safe.spoof, safe.medical, safe.violence
 
@@ -338,7 +326,7 @@ def is_image_safe(bot, update, image_name, image_type, image_id=None, image_url=
             elif image_type == "img":
                 text = "I deleted a photo that's "
             else:
-                text = "I deleted a message that contains a link of photo that's "
+                text = "I deleted a message that contains a photo link that's "
 
             if adult >= 3:
                 text += "{} to contain adult content, ".format(likelihood_name[adult])
@@ -355,13 +343,8 @@ def is_image_safe(bot, update, image_name, image_type, image_id=None, image_url=
 
             update.message.delete()
             bot.send_message(chat_id, text, reply_markup=reply_markup)
-        elif chat_type == Chat.PRIVATE:
-            if image_type == "doc":
-                text = "Your document of photo is "
-            elif image_type == "img":
-                text = "Your photo is "
-            else:
-                text = "Your link of photo (%s) is " % image_url
+        else:
+            text = "This is "
 
             if adult >= 3:
                 text += "{} to contain adult content, ".format(likelihood_name[adult])
@@ -376,7 +359,7 @@ def is_image_safe(bot, update, image_name, image_type, image_id=None, image_url=
             update.message.reply_text(text, quote=True)
     else:
         if chat_type == Chat.PRIVATE:
-            update.message.reply_text("I think this photo is safe.", quote=True)
+            update.message.reply_text("I think this does not contain any inappropriate content.", quote=True)
 
     return safe_image
 
@@ -391,12 +374,14 @@ def is_url_safe(bot, update, url, msg_text):
 
     headers = {"Content-Type": "application/json"}
     params = {"key": safe_browsing_token}
-    json = {"threatInfo": {
-        "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING"],
-        "platformTypes": ["ANY_PLATFORM"],
-        "threatEntryTypes": ["URL"],
-        "threatEntries": [{"url": url}]
-    }}
+    json = {
+        "threatInfo": {
+            "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING"],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": url}]
+        }
+    }
     response = requests.post(url=safe_browsing_url, headers=headers, params=params, json=json)
 
     if response.status_code == 200:
@@ -420,13 +405,13 @@ def is_url_safe(bot, update, url, msg_text):
                 db.commit()
                 db.close()
 
-                text = "I deleted a url that contains threats which was sent by {}.".format(user_name)
+                text = "{} sent a message but I deleted it as it contains a link with threats.".format(user_name)
                 keyboard = [[InlineKeyboardButton(text="Undo", callback_data="undo," + str(msg_id))]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
                 update.message.delete()
                 bot.send_message(chat_id, text, reply_markup=reply_markup)
-            elif chat_type == Chat.PRIVATE:
+            else:
                 update.message.reply_text("%s\nThis link contains threats. I don't recommend you to click on it." % url,
                                           quote=True)
         else:
@@ -436,17 +421,18 @@ def is_url_safe(bot, update, url, msg_text):
     return safe_url
 
 
+# Handles inline button
 def inline_button(bot, update):
     query = update.callback_query
     chat_id = query.message.chat_id
-    user_id = query.message.from_user.id
+    user_id = query.from_user.id
     task, msg_id = query.data.split(",")
     msg_id = int(msg_id)
 
     if query.message.chat.type in (Chat.GROUP, Chat.SUPERGROUP):
         member = bot.get_chat_member(chat_id, user_id)
 
-        if member.status != ChatMember.ADMINISTRATOR:
+        if member.status not in (ChatMember.ADMINISTRATOR, ChatMember.CREATOR):
             return
 
     if task == "undo":
