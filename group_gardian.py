@@ -35,7 +35,7 @@ port = int(os.environ.get("PORT", "5000"))
 telegram_token = os.environ.get("TELEGRAM_TOKEN_BETA") if os.environ.get("TELEGRAM_TOKEN_BETA") \
     else os.environ.get("TELEGRAM_TOKEN")
 dev_tele_id = int(os.environ.get("DEV_TELE_ID"))
-dev_email = os.environ.get("DEV_EMAIL") if os.environ.get("DEV_EMAIL") else "sample@email.com"
+dev_email = os.environ.get("DEV_EMAIL", "sample@email.com")
 dev_email_pw = os.environ.get("DEV_EMAIL_PW")
 is_email_feedback = os.environ.get("IS_EMAIL_FEEDBACK")
 smtp_host = os.environ.get("SMTP_HOST")
@@ -125,31 +125,43 @@ def create_db_tables():
 # Sends start message
 @run_async
 def start(bot, update):
-    tele_id = update.message.chat.id
+    text = "Welcome to Group Guardian!\n\n"
+    text += "I can protect you and your group from files or links that may contain threats, and photos that " \
+            "may contain adult, spoof, medical or violence content.\n\n"
+    text += "Type /help to see how to use me."
 
-    if update.message.chat.type != "group":
-        message = "Welcome to Group Guardian."
-
-        bot.sendMessage(tele_id, message)
+    try:
+        bot.sendMessage(update.message.from_user.id, text)
+    except:
+        return
 
 
 # Sends help message
 @run_async
 def help(bot, update):
-    player_tele_id = update.message.from_user.id
+    text = "If you are just chatting with me, simply send me files, photos or links and I will tell you if they " \
+           "are safe.\n\n"
+    text += "If you want me to guard your group, add me into your group and set me as an admin. I will check " \
+            "every file, photo and link that is sent to the group and remove it if it is not safe.\n\n"
+    text += "As a group admin, you can choose to undo the message that I deleted to review it. If you decide to " \
+            "delete it again, I will delete it for forever."
 
-    message = "Help"
-
-    bot.sendMessage(player_tele_id, message)
+    try:
+        bot.sendMessage(update.message.from_user.id, text)
+    except:
+        return
 
 
 # Sends donate message
 @run_async
 def donate(bot, update):
-    player_tele_id = update.message.from_user.id
-    message = "Want to help keep me online? Please donate to %s through PayPal.\n\nDonations help " \
-              "me to stay on my server and keep running." % dev_email
-    bot.send_message(player_tele_id, message)
+    text = "Want to help keep me online? Please donate to %s through PayPal.\n\nDonations help me to stay on my " \
+           "server and keep running." % dev_email
+
+    try:
+        bot.send_message(update.message.from_user.id, text)
+    except:
+        return
 
 
 # Checks for image document
@@ -216,7 +228,7 @@ def check_url(bot, update):
                         f.write(response.content)
 
                     if not is_image_safe(bot, update, image_name, "url", image_url=url, msg_text=text) and \
-                            chat_type in (Chat.GROUP, Chat.SUPERGROUP):
+                                    chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                         msg_deleted = True
                         break
                 else:
