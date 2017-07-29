@@ -17,7 +17,8 @@ import urllib.parse
 from google.cloud import vision
 from urlextract import URLExtract
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ChatMember, Chat, MessageEntity
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ChatMember, Chat, \
+    MessageEntity, ChatAction
 from telegram.error import TelegramError
 from telegram.ext import Updater, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, Filters
 from telegram.ext.dispatcher import run_async
@@ -77,6 +78,7 @@ def main():
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help))
     dp.add_handler(CommandHandler("donate", donate))
+    dp.add_handler(MessageHandler(Filters.status_update.new_chat_members, ask_admin))
     dp.add_handler(MessageHandler((Filters.document & (Filters.forwarded | ~Filters.forwarded)), check_document))
     dp.add_handler(MessageHandler((Filters.photo & (Filters.forwarded | ~Filters.forwarded)), check_image))
     dp.add_handler(MessageHandler((Filters.entity(MessageEntity.URL) & (Filters.forwarded | ~Filters.forwarded)),
@@ -164,8 +166,23 @@ def donate(bot, update):
         return
 
 
+# Asks for bot admin
+@run_async
+def ask_admin(bot, update):
+    for user in update.message.new_chat_members:
+        if user.id == bot.id:
+            text = "Hello everyone! I am Group Guardian. Please set me as one of the admins so that I can start " \
+                   "guarding your group."
+            bot.send_message(update.message.chat_id, text)
+
+            return
+
+
 # Checks for image document
+@run_async
 def check_document(bot, update):
+    update.message.chat.send_action(ChatAction.TYPING)
+
     doc = update.message.document
     doc_id = doc.file_id
     doc_mime_type = doc.mime_type
@@ -183,7 +200,10 @@ def check_document(bot, update):
 
 
 # Checks for image
+@run_async
 def check_image(bot, update):
+    update.message.chat.send_action(ChatAction.TYPING)
+
     image = update.message.photo[-1]
     image_id = image.file_id
     image_size = image.file_size
@@ -198,7 +218,10 @@ def check_image(bot, update):
 
 
 # Checks for url
+@run_async
 def check_url(bot, update):
+    update.message.chat.send_action(ChatAction.TYPING)
+
     msg_deleted = False
     large_err = ""
     download_err = ""
@@ -220,7 +243,7 @@ def check_url(bot, update):
 
             if response.status_code == 200:
                 if int(response.headers["content-length"]) <= vision_image_size_limit:
-                    if not is_image_safe(bot, update, url, "url", image_url=url, msg_text=text) and \
+                    if not is_image_safe(bot, update, url, "url", msg_text=text) and \
                                     chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                         msg_deleted = True
                         break
@@ -255,6 +278,9 @@ def is_file_safe(bot, update, file_path, file_type, file_id):
             safe_file = False
 
             if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
+                if bot.get_chat_member(chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
+                    return
+
                 while True:
                     try:
                         db = connect_db()
@@ -289,7 +315,7 @@ def is_file_safe(bot, update, file_path, file_type, file_id):
 
 
 # Checks if image's content is safe
-def is_image_safe(bot, update, image_path, image_type, image_id=None, image_url=None, msg_text=None):
+def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=None):
     safe_image = True
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
@@ -307,6 +333,9 @@ def is_image_safe(bot, update, image_path, image_type, image_id=None, image_url=
         safe_image = False
 
         if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
+            if bot.get_chat_member(chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
+                return
+
             while True:
                 try:
                     db = connect_db()
@@ -388,6 +417,9 @@ def is_url_safe(bot, update, url, msg_text):
         results = response.json()
 
         if "matches" in results and results["matches"]:
+            if bot.get_chat_member(chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
+                return
+
             safe_url = False
 
             if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
