@@ -125,7 +125,7 @@ def start(bot, update):
     tele_id = update.message.chat.id
 
     if update.message.chat.type != "group":
-        message = "Start"
+        message = "Welcome to Group Guardian."
 
         bot.sendMessage(tele_id, message)
 
@@ -162,7 +162,7 @@ def check_document(bot, update):
             image = bot.get_file(doc_id)
             image.download(image_name)
 
-            image_safe_search(bot, update, image_name, "doc", image_id=doc_id)
+            is_image_safe(bot, update, image_name, "doc", image_id=doc_id)
         else:
             update.message.reply_text("This document of photo can't be checked as it is too large for me to process.")
 
@@ -178,7 +178,7 @@ def check_image(bot, update):
         image = bot.get_file(image_id)
         image.download(image_name)
 
-        image_safe_search(bot, update, image_name, "img", image_id=image_id)
+        is_image_safe(bot, update, image_name, "img", image_id=image_id)
     else:
         update.message.reply_text("This photo can't be checked as it is too large for me to process.")
 
@@ -189,6 +189,7 @@ def check_url(bot, update):
     large_err = ""
     download_err = ""
     text = update.message.text
+    chat_type = update.message.chat.type
     extractor = URLExtract()
     urls = extractor.find_urls(text)
 
@@ -204,9 +205,9 @@ def check_url(bot, update):
                     with open(image_name, "wb") as f:
                         f.write(response.content)
 
-                    if image_safe_search(bot, update, image_name, "url", msg_text=text):
+                    if not is_image_safe(bot, update, image_name, "url", image_url=url, msg_text=text) and \
+                            chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                         msg_deleted = True
-                    else:
                         break
                 else:
                     large_err = "Some of the links of photos in this message can't be checked as they are too large " \
@@ -215,15 +216,17 @@ def check_url(bot, update):
                 download_err = "Some of the links of photos in this message can't be checked as I can't retrieve " \
                                "the photos."
         else:
-            url_safe_browse(bot, update, url, text)
+            if not is_url_safe(bot, update, url, text) and chat_type in (Chat.GROUP, Chat.SUPERGROUP):
+                msg_deleted = True
+                break
 
     if not msg_deleted and (large_err or download_err):
         err_msg = large_err + " " + download_err
         update.message.reply_text(err_msg)
 
 
-# Performs image safe search
-def image_safe_search(bot, update, image_name, image_type, image_id=None, msg_text=None):
+# Checks if image is safe
+def is_image_safe(bot, update, image_name, image_type, image_id=None, image_url=None, msg_text=None):
     safe_image = True
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
@@ -237,7 +240,6 @@ def image_safe_search(bot, update, image_name, image_type, image_id=None, msg_te
     os.remove(image_name)
     safe = response.safe_search_annotation
     adult, spoof, medical, violence = safe.adult, safe.spoof, safe.medical, safe.violence
-    print(safe.adult, safe.spoof, safe.medical, safe.violence)
 
     if adult >= 3 or spoof >= 3 or medical >= 3 or violence >= 3:
         safe_image = False
@@ -285,7 +287,7 @@ def image_safe_search(bot, update, image_name, image_type, image_id=None, msg_te
             elif image_type == "img":
                 text = "Your photo is "
             else:
-                text = "Your link of photo is "
+                text = "Your link of photo (%s) is " % image_url
 
             if adult >= 3:
                 text += "{} to contain adult content, ".format(likelihood_name[adult])
@@ -302,7 +304,8 @@ def image_safe_search(bot, update, image_name, image_type, image_id=None, msg_te
     return safe_image
 
 
-def url_safe_browse(bot, update, url, msg_text):
+# Checks if url is safe
+def is_url_safe(bot, update, url, msg_text):
     safe_url = True
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
@@ -347,7 +350,8 @@ def url_safe_browse(bot, update, url, msg_text):
                 update.message.delete()
                 bot.send_message(chat_id, text, reply_markup=reply_markup)
             elif chat_type == Chat.PRIVATE:
-                update.message.reply_text("Your link contains threats.", quote=True)
+                update.message.reply_text("%s\nThis link contains threats. I don't recommend you to click on it." % url,
+                                          quote=True)
 
     return safe_url
 
