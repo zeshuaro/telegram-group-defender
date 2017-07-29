@@ -1,0 +1,6 @@
+google-cloud-vision==0.25.1
+langdetect==1.0.7
+python-telegram-bot==6.1.0
+python-env==1.0.0
+requests==2.18.1
+urlextract==0.4.1
