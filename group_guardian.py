@@ -130,8 +130,8 @@ def create_db_tables():
 @run_async
 def start(bot, update):
     text = "Welcome to Group Guardian!\n\n"
-    text += "I can protect you and your group from files or links that may contain threats, and photos that " \
-            "may contain adult, spoof, medical or violence content.\n\n"
+    text += "I can protect you and your group from files or links that may contain threats, and photos or links of " \
+            "photos that may contain adult, spoof, medical or violence content.\n\n"
     text += "Type /help to see how to use me."
 
     try:
@@ -144,7 +144,7 @@ def start(bot, update):
 @run_async
 def help(bot, update):
     text = "If you are just chatting with me, simply send me files, audios, photos, videos or links and I will tell " \
-           "you if they are safe.\n\n"
+           "you if they and their content (photos only) are safe and appropriate.\n\n"
     text += "If you want me to guard your group, add me into your group and set me as an admin. I will check " \
             "every file, audio, photo, video and link that is sent to the group and delete it if it is not safe.\n\n"
     text += "As a group admin, you can choose to undo the message that I deleted to review it. If you decide to " \
@@ -249,7 +249,7 @@ def check_url(bot, update):
                     f.write(response.content)
 
                 if os.path.getsize(filename) <= vision_image_size_limit:
-                    if not is_image_safe(bot, update, url, "url", msg_text=text) and \
+                    if not is_image_safe(bot, update, url, "url", msg_text=text, is_image_url=True) and \
                                     chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                         msg_deleted = True
                         break
@@ -350,7 +350,7 @@ def is_file_safe(bot, update, file_path, file_type, file_id):
 
 
 # Checks if image's content is safe
-def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=None):
+def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=None, is_image_url=False):
     safe_image = True
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
@@ -408,7 +408,10 @@ def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=N
             update.message.delete()
             bot.send_message(chat_id, text, reply_markup=reply_markup)
         else:
-            text = "This is "
+            if is_image_url:
+                text = "%s\nThis link is " % image_path
+            else:
+                text = "This is "
 
             if adult >= 3:
                 text += "{} to contain adult content, ".format(likelihood_name[adult])
@@ -597,7 +600,7 @@ def receive_feedback(bot, update):
         server.login(dev_email, dev_email_pw)
 
         text = "Feedback received from %d\n\n%s" % (update.message.from_user.id, update.message.text)
-        message = "Subject: %s\n\n%s" % ("Telegram Big Two Bot Feedback", text)
+        message = "Subject: %s\n\n%s" % ("Telegram Group Guardian Feedback", text)
         server.sendmail(dev_email, dev_email, message)
     else:
         logger.info("Feedback received from %d: %s" % (update.message.from_user.id, update.message.text))
