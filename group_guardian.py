@@ -117,10 +117,10 @@ def create_db_tables():
     cur = db.cursor()
 
     cur.execute("select * from information_schema.tables where table_name = 'msg_info'")
-    if cur.fetchone():
-        cur.execute("drop table msg_info")
-    cur.execute("create table msg_info (chat_id int, msg_id int, user_name text, file_id text, file_type text, "
-                "msg_text text)")
+    if not cur.fetchone():
+        # cur.execute("drop table msg_info")
+        cur.execute("create table msg_info (chat_id int, msg_id int, user_name text, file_id text, file_type text, "
+                    "msg_text text)")
 
     db.commit()
     db.close()
@@ -150,8 +150,12 @@ def help(bot, update):
     text += "As a group admin, you can choose to undo the message that I deleted to review it. If you decide to " \
             "delete it again, I will delete it for forever."
 
+    keyboard = [[InlineKeyboardButton("Join Channel", "https://t.me/grpguardianbotdev"),]]
+                 # InlineKeyboardButton("Rate me", "https://t.me/storebot?start=grpguardianbot")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     try:
-        bot.sendMessage(update.message.from_user.id, text)
+        bot.sendMessage(update.message.from_user.id, text, reply_markup=reply_markup)
     except:
         return
 
