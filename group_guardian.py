@@ -56,7 +56,7 @@ else:
     db_host = os.environ.get("DB_HOST")
     db_port = os.environ.get("DB_PORT")
 
-scanner_token = os.environ.get("SCANNER_TOKEN")
+scanner_token = os.environ.get("ATTACHMENT_SCANNER_API_TOKEN")
 scanner_url = "https://beta.attachmentscanner.com/requests"
 safe_browsing_token = os.environ.get("SAFE_BROWSING_TOKEN")
 safe_browsing_url = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
