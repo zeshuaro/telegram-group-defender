@@ -19,7 +19,6 @@ from urlextract import URLExtract
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ChatMember, Chat, \
     MessageEntity, ChatAction
-from telegram.error import TelegramError
 from telegram.ext import Updater, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, Filters
 from telegram.ext.dispatcher import run_async
 
@@ -72,17 +71,19 @@ def main():
     # Create the EventHandler and pass it your bot"s token.
     updater = Updater(telegram_token)
 
+    forward_filter = Filters.forwarded | ~Filters.forwarded
+
     # Get the dispatcher to register handlers
     dp = updater.dispatcher
     # on different commands - answer in Telegram
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help))
     dp.add_handler(CommandHandler("donate", donate))
-    dp.add_handler(MessageHandler(Filters.status_update.new_chat_members, ask_admin))
-    dp.add_handler(MessageHandler((Filters.document & (Filters.forwarded | ~Filters.forwarded)), check_document))
-    dp.add_handler(MessageHandler((Filters.photo & (Filters.forwarded | ~Filters.forwarded)), check_image))
-    dp.add_handler(MessageHandler((Filters.entity(MessageEntity.URL) & (Filters.forwarded | ~Filters.forwarded)),
-                                  check_url))
+    dp.add_handler(MessageHandler(Filters.status_update.new_chat_members, group_greeting))
+    dp.add_handler(MessageHandler((Filters.document & forward_filter), check_document))
+    dp.add_handler(MessageHandler((Filters.photo & forward_filter), check_image))
+    dp.add_handler(MessageHandler((Filters.entity(MessageEntity.URL) & forward_filter), check_url))
+    dp.add_handler(MessageHandler(((Filters.audio | Filters.video) & forward_filter), check_audio_video))
     dp.add_handler(CallbackQueryHandler(inline_button))
     dp.add_handler(feedback_cov_handler())
     dp.add_handler(CommandHandler("send", send, pass_args=True))
@@ -118,7 +119,8 @@ def create_db_tables():
     cur.execute("select * from information_schema.tables where table_name = 'msg_info'")
     if cur.fetchone():
         cur.execute("drop table msg_info")
-    cur.execute("create table msg_info (chat_id int, msg_id int, user_name text, file_id text, msg_text text)")
+    cur.execute("create table msg_info (chat_id int, msg_id int, user_name text, file_id text, file_type text, "
+                "msg_text text)")
 
     db.commit()
     db.close()
@@ -166,9 +168,9 @@ def donate(bot, update):
         return
 
 
-# Asks for bot admin
+# Greets when bot is added to group and asks for bot admin
 @run_async
-def ask_admin(bot, update):
+def group_greeting(bot, update):
     for user in update.message.new_chat_members:
         if user.id == bot.id:
             text = "Hello everyone! I am Group Guardian. Please set me as one of the admins so that I can start " \
@@ -178,7 +180,7 @@ def ask_admin(bot, update):
             return
 
 
-# Checks for image document
+# Checks for document
 @run_async
 def check_document(bot, update):
     update.message.chat.send_action(ChatAction.TYPING)
@@ -234,7 +236,7 @@ def check_url(bot, update):
     for url in urls:
         mime_type = mimetypes.guess_type(url)[0]
 
-        if not mime_type:
+        if not mime_type or (mime_type and not mime_type.startswith("image")):
             if not is_url_safe(bot, update, url, text) and chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                 msg_deleted = True
                 break
@@ -242,21 +244,50 @@ def check_url(bot, update):
             response = requests.get(url)
 
             if response.status_code == 200:
-                if int(response.headers["content-length"]) <= vision_image_size_limit:
+                filename = random_string(20)
+                with open(filename, "wb") as f:
+                    f.write(response.content)
+
+                if os.path.getsize(filename) <= vision_image_size_limit:
                     if not is_image_safe(bot, update, url, "url", msg_text=text) and \
                                     chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                         msg_deleted = True
                         break
                 else:
-                    large_err = "Some of the photo links in this message are not checked as they are too large for " \
-                                "me to process."
+                    if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
+                        large_err = "Some of the photo links in this message are not checked as they are too large " \
+                                    "for me to process."
+                    else:
+                        update.message.reply_text("%s\nThis photo link can't be checked as it is too large for me to "
+                                                  "process." % url)
+                os.remove(filename)
             else:
-                download_err = "Some of the photo links in this message are not checked as I can't retrieve " \
-                               "the photos."
+                if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
+                    download_err = "Some of the photo links in this message are not checked as I can't retrieve " \
+                                   "the photos."
+                else:
+                    update.message.reply_text("%s\nThis photo link can't be checked as I can't retrieve the photo." %
+                                              url)
 
     if not msg_deleted and (large_err or download_err):
         err_msg = large_err + " " + download_err
         update.message.reply_text(err_msg)
+
+
+# Checks for audio or video
+def check_audio_video(bot, update):
+    update.message.chat.send_action(ChatAction.TYPING)
+
+    audio, video = update.message.audio, update.message.video
+
+    if audio:
+        file_id = audio.file_id
+        file_path = bot.get_file(file_id).file_path
+        is_file_safe(bot, update, file_path, "aud", file_id)
+    else:
+        file_id = video.file_id
+        file_path = bot.get_file(file_id).file_path
+        is_file_safe(bot, update, file_path, "vid", file_id)
 
 
 # Checks if a file is safe
@@ -290,15 +321,19 @@ def is_file_safe(bot, update, file_path, file_type, file_id):
                         continue
 
                 cur = db.cursor()
-                cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, msg_text) values "
-                            "(%s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, file_id, None))
+                cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, file_type, msg_text) values "
+                            "(%s, %s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, file_id, file_type, None))
                 db.commit()
                 db.close()
 
-                if file_type == "doc":
-                    text = "{} sent a document but I deleted it as it contains threats".format(user_name)
+                if file_type == "img":
+                    text = "{} sent a photo but I deleted it as it contains threats.".format(user_name)
+                elif file_type == "aud":
+                    text = "{} sent a audio but I deleted it as it contains threats.".format(user_name)
+                elif file_type == "vid":
+                    text = "{} sent a video but I deleted it as it contains threats.".format(user_name)
                 else:
-                    text = "{} sent a photo but I deleted it as it contains threats".format(user_name)
+                    text = "{} sent a document but I deleted it as it contains threats.".format(user_name)
 
                 keyboard = [[InlineKeyboardButton(text="Undo", callback_data="undo," + str(msg_id))]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -345,8 +380,8 @@ def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=N
                     continue
 
             cur = db.cursor()
-            cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, msg_text) values "
-                        "(%s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, image_id, msg_text))
+            cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, file_type, msg_text) values "
+                        "(%s, %s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, image_id, image_type, msg_text))
             db.commit()
             db.close()
 
@@ -432,8 +467,8 @@ def is_url_safe(bot, update, url, msg_text):
                         continue
 
                 cur = db.cursor()
-                cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, msg_text) values "
-                            "(%s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, None, msg_text))
+                cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, file_type, msg_text) values "
+                            "(%s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, None, None, msg_text))
                 db.commit()
                 db.close()
 
@@ -454,6 +489,7 @@ def is_url_safe(bot, update, url, msg_text):
 
 
 # Handles inline button
+@run_async
 def inline_button(bot, update):
     query = update.callback_query
     chat_id = query.message.chat_id
@@ -477,9 +513,9 @@ def inline_button(bot, update):
                 continue
 
         cur = db.cursor()
-        cur.execute("select user_name, file_id, msg_text from msg_info where chat_id = %s and msg_id = %s",
+        cur.execute("select user_name, file_id, file_type, msg_text from msg_info where chat_id = %s and msg_id = %s",
                     (chat_id, msg_id))
-        user_name, file_id, msg_text = cur.fetchone()
+        user_name, file_id, file_type, msg_text = cur.fetchone()
         cur.execute("delete from msg_info where chat_id = %s and msg_id = %s", (chat_id, msg_id))
         db.commit()
         db.close()
@@ -490,10 +526,14 @@ def inline_button(bot, update):
         query.message.delete()
 
         if file_id:
-            try:
-                bot.send_document(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
-            except TelegramError:
+            if file_type == "img":
                 bot.send_photo(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
+            elif file_type == "aud":
+                bot.send_audio(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
+            elif file_type == "vid":
+                bot.send_video(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
+            else:
+                bot.send_document(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
         else:
             bot.send_message(chat_id, "%s sent this:\n%s" % (user_name, msg_text), reply_markup=reply_markup)
     elif task == "delete":
