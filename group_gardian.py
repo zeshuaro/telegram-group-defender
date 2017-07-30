@@ -143,10 +143,10 @@ def start(bot, update):
 # Sends help message
 @run_async
 def help(bot, update):
-    text = "If you are just chatting with me, simply send me files, photos or links and I will tell you if they " \
-           "are safe.\n\n"
+    text = "If you are just chatting with me, simply send me files, audios, photos, videos or links and I will tell " \
+           "you if they are safe.\n\n"
     text += "If you want me to guard your group, add me into your group and set me as an admin. I will check " \
-            "every file, photo and link that is sent to the group and remove it if it is not safe.\n\n"
+            "every file, audio, photo, video and link that is sent to the group and delete it if it is not safe.\n\n"
     text += "As a group admin, you can choose to undo the message that I deleted to review it. If you decide to " \
             "delete it again, I will delete it for forever."
 
