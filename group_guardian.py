@@ -19,6 +19,7 @@ from urlextract import URLExtract
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ChatMember, Chat, \
     MessageEntity, ChatAction
+from telegram.constants import *
 from telegram.ext import Updater, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, Filters
 from telegram.ext.dispatcher import run_async
 
@@ -143,12 +144,14 @@ def start(bot, update):
 # Sends help message
 @run_async
 def help(bot, update):
-    text = "If you are just chatting with me, simply send me files, audios, photos, videos or links and I will tell " \
-           "you if they and their content (photos only) are safe and appropriate.\n\n"
+    text = "If you are just chatting with me, simply send me any files or links and I will tell you if they and " \
+           "their content (photos only) are safe and appropriate.\n\n"
     text += "If you want me to guard your group, add me into your group and set me as an admin. I will check " \
-            "every file, audio, photo, video and link that is sent to the group and delete it if it is not safe.\n\n"
-    text += "As a group admin, you can choose to undo the message that I deleted to review it. If you decide to " \
-            "delete it again, I will delete it for forever."
+            "every file and link that is sent to the group and delete it if it is not safe.\n\n"
+    text += "As a group admin, you can choose to undo the message that I deleted to review it.\n\n"
+    text += "Please note that I can only download files up to 20 MB in size. And for photo content checking, " \
+            "I can only handle photos up to 4 MB in size. Any files that have a size greater than the limits " \
+            "will be ignored."
 
     keyboard = [[InlineKeyboardButton("Join Channel", "https://t.me/grpguardianbotdev"),]]
                  # InlineKeyboardButton("Rate me", "https://t.me/storebot?start=grpguardianbot")]]
@@ -190,9 +193,13 @@ def check_document(bot, update):
     update.message.chat.send_action(ChatAction.TYPING)
 
     doc = update.message.document
+    doc_size = doc.file_size
+
+    if doc_size > MAX_FILESIZE_DOWNLOAD:
+        return
+
     doc_id = doc.file_id
     doc_mime_type = doc.mime_type
-    doc_size = doc.file_size
     doc_file = bot.get_file(doc_id)
     doc_path = doc_file.file_path
 
@@ -211,8 +218,12 @@ def check_image(bot, update):
     update.message.chat.send_action(ChatAction.TYPING)
 
     image = update.message.photo[-1]
-    image_id = image.file_id
     image_size = image.file_size
+
+    if image_size > MAX_FILESIZE_DOWNLOAD:
+        return
+
+    image_id = image.file_id
     image_file = bot.get_file(image_id)
     image_path = image_file.file_path
 
@@ -286,10 +297,20 @@ def check_audio_video(bot, update):
 
     if audio:
         file_id = audio.file_id
+        file_size = audio.file_size
+
+        if file_size > MAX_FILESIZE_DOWNLOAD:
+            return
+
         file_path = bot.get_file(file_id).file_path
         is_file_safe(bot, update, file_path, "aud", file_id)
     else:
         file_id = video.file_id
+        file_size = video.file_size
+
+        if file_size > MAX_FILESIZE_DOWNLOAD:
+            return
+
         file_path = bot.get_file(file_id).file_path
         is_file_safe(bot, update, file_path, "vid", file_id)
 
