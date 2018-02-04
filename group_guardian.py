@@ -2,14 +2,12 @@
 # coding: utf-8
 
 import dotenv
-import langdetect
 import logging
 import mimetypes
 import os
 import psycopg2
 import random
 import requests
-import smtplib
 import string
 import time
 import urllib.parse
@@ -23,23 +21,21 @@ from telegram.constants import *
 from telegram.ext import Updater, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, Filters
 from telegram.ext.dispatcher import run_async
 
+from feedback_bot import feedback_cov_handler
+
 # Enable logging
 logging.basicConfig(format="[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %I:%M:%S %p",
                     level=logging.INFO)
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-dotenv.load(dotenv_path)
-app_url = os.environ.get("APP_URL")
-port = int(os.environ.get("PORT", "5000"))
+dotenv.load_dotenv(dotenv_path)
+APP_URL = os.environ.get("APP_URL")
+PORT = int(os.environ.get("PORT", "5000"))
 
-telegram_token = os.environ.get("TELEGRAM_TOKEN_BETA") if os.environ.get("TELEGRAM_TOKEN_BETA") \
-    else os.environ.get("TELEGRAM_TOKEN")
-dev_tele_id = int(os.environ.get("DEV_TELE_ID"))
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN_BETA", os.environ.get("TELEGRAM_TOKEN"))
+DEV_TELE_ID = int(os.environ.get("DEV_TELE_ID"))
 dev_email = os.environ.get("DEV_EMAIL", "sample@email.com")
-dev_email_pw = os.environ.get("DEV_EMAIL_PW")
-is_email_feedback = os.environ.get("IS_EMAIL_FEEDBACK")
-smtp_host = os.environ.get("SMTP_HOST")
 
 if os.environ.get("DATABASE_URL"):
     urllib.parse.uses_netloc.append("postgres")
@@ -57,20 +53,20 @@ else:
     db_host = os.environ.get("DB_HOST")
     db_port = os.environ.get("DB_PORT")
 
-scanner_token = os.environ.get("ATTACHMENT_SCANNER_API_TOKEN")
-scanner_url = "https://beta.attachmentscanner.com/requests"
-safe_browsing_token = os.environ.get("SAFE_BROWSING_TOKEN")
-safe_browsing_url = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
+SCANNER_TOKEN = os.environ.get("ATTACHMENT_SCANNER_API_TOKEN")
+SCANNER_URL = "https://beta.attachmentscanner.com/requests"
+SAFE_BROWSING_TOKEN = os.environ.get("SAFE_BROWSING_TOKEN")
+SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 
-vision_image_size_limit = 4000000
-likelihood_name = ("UNKNOWN", "VERY UNLIKELY", "UNLIKELY", "POSSIBLE", "LIKELY", "VERY LIKELY")
+VISION_IMAGE_SIZE_LIMIT = 4000000
+LIKELIHOOD_NAME = ("UNKNOWN", "VERY UNLIKELY", "UNLIKELY", "POSSIBLE", "LIKELY", "VERY LIKELY")
 
 
 def main():
     create_db_tables()
 
     # Create the EventHandler and pass it your bot"s token.
-    updater = Updater(telegram_token)
+    updater = Updater(TELEGRAM_TOKEN)
 
     forward_filter = Filters.forwarded | ~Filters.forwarded
 
@@ -87,17 +83,17 @@ def main():
     dp.add_handler(MessageHandler(((Filters.audio | Filters.video) & forward_filter), check_audio_video))
     dp.add_handler(CallbackQueryHandler(inline_button))
     dp.add_handler(feedback_cov_handler())
-    dp.add_handler(CommandHandler("send", send, pass_args=True))
+    dp.add_handler(CommandHandler("send", send, Filters.user(DEV_TELE_ID), pass_args=True))
 
     # log all errors
     dp.add_error_handler(error)
 
     # Start the Bot
-    if app_url:
+    if APP_URL:
         updater.start_webhook(listen="0.0.0.0",
-                              port=port,
-                              url_path=telegram_token)
-        updater.bot.set_webhook(app_url + telegram_token)
+                              port=PORT,
+                              url_path=TELEGRAM_TOKEN)
+        updater.bot.set_webhook(APP_URL + TELEGRAM_TOKEN)
     else:
         updater.start_polling()
 
@@ -153,8 +149,8 @@ def help(bot, update):
             "I can only handle photos up to 4 MB in size. Any files that have a size greater than the limits " \
             "will be ignored."
 
-    keyboard = [[InlineKeyboardButton("Join Channel", "https://t.me/grpguardianbotdev"),]]
-                 # InlineKeyboardButton("Rate me", "https://t.me/storebot?start=grpguardianbot")]]
+    keyboard = [[InlineKeyboardButton("Join Channel", "https://t.me/grpguardianbotdev")],
+                [InlineKeyboardButton("Rate me", "https://t.me/storebot?start=grpguardianbot")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
@@ -205,7 +201,7 @@ def check_document(bot, update):
 
     if is_file_safe(bot, update, doc_path, "doc", doc_id):
         if doc_mime_type.startswith("image"):
-            if doc_size <= vision_image_size_limit:
+            if doc_size <= VISION_IMAGE_SIZE_LIMIT:
                 is_image_safe(bot, update, doc_path, "doc", image_id=doc_id)
             else:
                 text = "This document of photo can't be checked as it is too large for me to process."
@@ -228,7 +224,7 @@ def check_image(bot, update):
     image_path = image_file.file_path
 
     if is_file_safe(bot, update, image_path, "img", image_id):
-        if image_size <= vision_image_size_limit:
+        if image_size <= VISION_IMAGE_SIZE_LIMIT:
             is_image_safe(bot, update, image_path, "img", image_id=image_id)
         else:
             update.message.reply_text("This photo can't be checked as it is too large for me to process.")
@@ -263,7 +259,7 @@ def check_url(bot, update):
                 with open(filename, "wb") as f:
                     f.write(response.content)
 
-                if os.path.getsize(filename) <= vision_image_size_limit:
+                if os.path.getsize(filename) <= VISION_IMAGE_SIZE_LIMIT:
                     if not is_image_safe(bot, update, url, "url", msg_text=text, is_image_url=True) and \
                                     chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                         msg_deleted = True
@@ -323,9 +319,9 @@ def is_file_safe(bot, update, file_path, file_type, file_id):
     msg_id = update.message.message_id
     user_name = update.message.from_user.first_name
 
-    headers = {"Content-Type": "application/json", "Authorization": "bearer %s" % scanner_token}
+    headers = {"Content-Type": "application/json", "Authorization": "bearer %s" % SCANNER_TOKEN}
     json = {"url": file_path}
-    response = requests.post(url=scanner_url, headers=headers, json=json)
+    response = requests.post(url=SCANNER_URL, headers=headers, json=json)
 
     if response.status_code == 200:
         results = response.json()
@@ -418,13 +414,13 @@ def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=N
                 text = "I deleted a message that contains a photo link that's "
 
             if adult >= 3:
-                text += "{} to contain adult content, ".format(likelihood_name[adult])
+                text += "{} to contain adult content, ".format(LIKELIHOOD_NAME[adult])
             if spoof >= 3:
-                text += "{} to contain spoof content, ".format(likelihood_name[spoof])
+                text += "{} to contain spoof content, ".format(LIKELIHOOD_NAME[spoof])
             if medical >= 3:
-                text += "{} to contain medical content, ".format(likelihood_name[medical])
+                text += "{} to contain medical content, ".format(LIKELIHOOD_NAME[medical])
             if violence >= 3:
-                text += "{} to contain violence content, ".format(likelihood_name[violence])
+                text += "{} to contain violence content, ".format(LIKELIHOOD_NAME[violence])
             text += "which was sent by {}.".format(user_name)
 
             keyboard = [[InlineKeyboardButton(text="Undo", callback_data="undo," + str(msg_id))]]
@@ -439,13 +435,13 @@ def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=N
                 text = "This is "
 
             if adult >= 3:
-                text += "{} to contain adult content, ".format(likelihood_name[adult])
+                text += "{} to contain adult content, ".format(LIKELIHOOD_NAME[adult])
             if spoof >= 3:
-                text += "{} to contain spoof content, ".format(likelihood_name[spoof])
+                text += "{} to contain spoof content, ".format(LIKELIHOOD_NAME[spoof])
             if medical >= 3:
-                text += "{} to contain medical content, ".format(likelihood_name[medical])
+                text += "{} to contain medical content, ".format(LIKELIHOOD_NAME[medical])
             if violence >= 3:
-                text += "{} to contain violence content, ".format(likelihood_name[violence])
+                text += "{} to contain violence content, ".format(LIKELIHOOD_NAME[violence])
             text = text.rstrip(", ") + "."
 
             update.message.reply_text(text, quote=True)
@@ -465,7 +461,7 @@ def is_url_safe(bot, update, url, msg_text):
     user_name = update.message.from_user.first_name
 
     headers = {"Content-Type": "application/json"}
-    params = {"key": safe_browsing_token}
+    params = {"key": SAFE_BROWSING_TOKEN}
     json = {
         "threatInfo": {
             "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING"],
@@ -474,7 +470,7 @@ def is_url_safe(bot, update, url, msg_text):
             "threatEntries": [{"url": url}]
         }
     }
-    response = requests.post(url=safe_browsing_url, headers=headers, params=params, json=json)
+    response = requests.post(url=SAFE_BROWSING_URL, headers=headers, params=params, json=json)
 
     if response.status_code == 200:
         results = response.json()
@@ -573,66 +569,6 @@ def random_string(length):
     return "".join(random.choice(string.ascii_letters + string.digits) for _ in range(length))
 
 
-# Creates a feedback conversation handler
-def feedback_cov_handler():
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("feedback", feedback)],
-
-        states={
-            0: [MessageHandler(Filters.text, receive_feedback)],
-        },
-
-        fallbacks=[CommandHandler("cancel", cancel)],
-
-        allow_reentry=True
-    )
-
-    return conv_handler
-
-
-# Sends a feedback message
-@run_async
-def feedback(bot, update):
-    update.message.reply_text("Please send me your feedback or type /cancel to cancel this operation. My developer "
-                              "can understand English and Chinese.")
-
-    return 0
-
-
-# Saves a feedback
-@run_async
-def receive_feedback(bot, update):
-    feedback_msg = update.message.text
-    valid_lang = False
-    langdetect.DetectorFactory.seed = 0
-    langs = langdetect.detect_langs(feedback_msg)
-
-    for lang in langs:
-        if lang.lang in ("en", "zh-tw", "zh-cn"):
-            valid_lang = True
-            break
-
-    if not valid_lang:
-        update.message.reply_text("The feedback you sent is not in English or Chinese. Please try again.")
-        return 0
-
-    update.message.reply_text("Thank you for your feedback, I will let my developer know.")
-
-    if is_email_feedback:
-        server = smtplib.SMTP(smtp_host)
-        server.ehlo()
-        server.starttls()
-        server.login(dev_email, dev_email_pw)
-
-        text = "Feedback received from %d\n\n%s" % (update.message.from_user.id, update.message.text)
-        message = "Subject: %s\n\n%s" % ("Telegram Group Guardian Feedback", text)
-        server.sendmail(dev_email, dev_email, message)
-    else:
-        logger.info("Feedback received from %d: %s" % (update.message.from_user.id, update.message.text))
-
-    return ConversationHandler.END
-
-
 # Cancels feedback opteration
 @run_async
 def cancel(bot, update):
@@ -640,21 +576,20 @@ def cancel(bot, update):
     return ConversationHandler.END
 
 
-# Sends a message to a specified user
+# Send a message to a specified user
 def send(bot, update, args):
-    if update.message.from_user.id == dev_tele_id:
-        tele_id = int(args[0])
-        message = " ".join(args[1:])
+    tele_id = int(args[0])
+    message = " ".join(args[1:])
 
-        try:
-            bot.send_message(tele_id, message)
-        except Exception as e:
-            logger.exception(e)
-            bot.send_message(dev_tele_id, "Failed to send message")
+    try:
+        bot.send_message(tele_id, message)
+    except Exception as e:
+        LOGGER.exception(e)
+        bot.send_message(DEV_TELE_ID, "Failed to send message")
 
 
 def error(bot, update, error):
-    logger.warning("Update '%s' caused error '%s'" % (update, error))
+    LOGGER.warning("Update '%s' caused error '%s'" % (update, error))
 
 
 if __name__ == "__main__":

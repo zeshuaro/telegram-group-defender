@@ -1,7 +1,8 @@
-google-cloud-vision==0.25.1
-langdetect==1.0.7
-psycopg2==2.7.1
-python-telegram-bot==6.1.0
-python-env==1.0.0
-requests==2.18.1
-urlextract==0.4.1
+google-cloud-vision==0.30.0
+psycopg2==2.7.3
+python-telegram-bot==9.0.0
+python-dotenv==0.7.1
+requests==2.18.4
+urlextract==0.7
+textblob==0.14.0
+slackclient==1.1.0
