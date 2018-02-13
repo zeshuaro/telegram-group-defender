@@ -35,7 +35,7 @@ PORT = int(os.environ.get("PORT", "5000"))
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN_BETA", os.environ.get("TELEGRAM_TOKEN"))
 DEV_TELE_ID = int(os.environ.get("DEV_TELE_ID"))
-dev_email = os.environ.get("DEV_EMAIL", "sample@email.com")
+DEV_EMAIL = os.environ.get("DEV_EMAIL", "sample@email.com")
 
 if os.environ.get("DATABASE_URL"):
     urllib.parse.uses_netloc.append("postgres")
@@ -58,6 +58,9 @@ SCANNER_URL = "https://beta.attachmentscanner.com/requests"
 SAFE_BROWSING_TOKEN = os.environ.get("SAFE_BROWSING_TOKEN")
 SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 
+CHANNEL_NAME = "grpguardianbotdev"  # Channel username
+BOT_NAME = "grpguardianbot"  # Bot username
+
 VISION_IMAGE_SIZE_LIMIT = 4000000
 LIKELIHOOD_NAME = ("UNKNOWN", "VERY UNLIKELY", "UNLIKELY", "POSSIBLE", "LIKELY", "VERY LIKELY")
 
@@ -68,19 +71,17 @@ def main():
     # Create the EventHandler and pass it your bot"s token.
     updater = Updater(TELEGRAM_TOKEN)
 
-    forward_filter = Filters.forwarded | ~Filters.forwarded
-
     # Get the dispatcher to register handlers
     dp = updater.dispatcher
     # on different commands - answer in Telegram
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help))
-    dp.add_handler(CommandHandler("donate", donate))
+    dp.add_handler(CommandHandler("start", start_msg))
+    dp.add_handler(CommandHandler("help", help_msg))
+    dp.add_handler(CommandHandler("donate", donate_msg))
     dp.add_handler(MessageHandler(Filters.status_update.new_chat_members, group_greeting))
-    dp.add_handler(MessageHandler((Filters.document & forward_filter), check_document))
-    dp.add_handler(MessageHandler((Filters.photo & forward_filter), check_image))
-    dp.add_handler(MessageHandler((Filters.entity(MessageEntity.URL) & forward_filter), check_url))
-    dp.add_handler(MessageHandler(((Filters.audio | Filters.video) & forward_filter), check_audio_video))
+    dp.add_handler(MessageHandler(Filters.document, check_document))
+    dp.add_handler(MessageHandler(Filters.photo , check_image))
+    dp.add_handler(MessageHandler(Filters.entity(MessageEntity.URL), check_url))
+    dp.add_handler(MessageHandler((Filters.audio | Filters.video), check_audio_video))
     dp.add_handler(CallbackQueryHandler(inline_button))
     dp.add_handler(feedback_cov_handler())
     dp.add_handler(CommandHandler("send", send, Filters.user(DEV_TELE_ID), pass_args=True))
@@ -125,21 +126,18 @@ def create_db_tables():
 
 # Sends start message
 @run_async
-def start(bot, update):
+def start_msg(bot, update):
     text = "Welcome to Group Guardian!\n\n"
     text += "I can protect you and your group from files or links that may contain threats, and photos or links of " \
             "photos that may contain adult, spoof, medical or violence content.\n\n"
     text += "Type /help to see how to use me."
 
-    try:
-        bot.sendMessage(update.message.from_user.id, text)
-    except:
-        return
+    update.message.reply_text(text)
 
 
 # Sends help message
 @run_async
-def help(bot, update):
+def help_msg(bot, update):
     text = "If you are just chatting with me, simply send me any files or links and I will tell you if they and " \
            "their content (photos only) are safe and appropriate.\n\n"
     text += "If you want me to guard your group, add me into your group and set me as an admin. I will check " \
@@ -149,26 +147,20 @@ def help(bot, update):
             "I can only handle photos up to 4 MB in size. Any files that have a size greater than the limits " \
             "will be ignored."
 
-    keyboard = [[InlineKeyboardButton("Join Channel", "https://t.me/grpguardianbotdev")],
-                [InlineKeyboardButton("Rate me", "https://t.me/storebot?start=grpguardianbot")]]
+    keyboard = [[InlineKeyboardButton("Join Channel", f"https://t.me/{CHANNEL_NAME}")],
+                [InlineKeyboardButton("Rate me", f"https://t.me/storebot?start={BOT_NAME}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    try:
-        bot.sendMessage(update.message.from_user.id, text, reply_markup=reply_markup)
-    except:
-        return
+    update.message.reply_text(text, reply_markup=reply_markup)
 
 
 # Sends donate message
 @run_async
-def donate(bot, update):
-    text = "Want to help keep me online? Please donate to %s through PayPal.\n\nDonations help me to stay on my " \
-           "server and keep running." % dev_email
+def donate_msg(bot, update):
+    text = f"Want to help keep me online? Please donate to {DEV_EMAIL} through PayPal.\n\n" \
+           f"Donations help me to stay on my server and keep running."
 
-    try:
-        bot.send_message(update.message.from_user.id, text)
-    except:
-        return
+    update.message.reply_text(text)
 
 
 # Greets when bot is added to group and asks for bot admin
@@ -178,20 +170,20 @@ def group_greeting(bot, update):
         if user.id == bot.id:
             text = "Hello everyone! I am Group Guardian. Please set me as one of the admins so that I can start " \
                    "guarding your group."
-            bot.send_message(update.message.chat_id, text)
-
-            return
+            update.message.reply_text(text)
 
 
 # Checks for document
 @run_async
 def check_document(bot, update):
     update.message.chat.send_action(ChatAction.TYPING)
-
     doc = update.message.document
     doc_size = doc.file_size
 
     if doc_size > MAX_FILESIZE_DOWNLOAD:
+        if update.message.chat.type == Chat.PRIVATE:
+            update.message.reply_text("Your document is too large for me to download and process, sorry.")
+
         return
 
     doc_id = doc.file_id
@@ -204,30 +196,31 @@ def check_document(bot, update):
             if doc_size <= VISION_IMAGE_SIZE_LIMIT:
                 is_image_safe(bot, update, doc_path, "doc", image_id=doc_id)
             else:
-                text = "This document of photo can't be checked as it is too large for me to process."
-                update.message.reply_text(text)
+                if update.message.chat.type == Chat.PRIVATE:
+                    text = "This document of photo can't be checked as it is too large for me to process."
+                    update.message.reply_text(text)
 
 
 # Checks for image
 @run_async
 def check_image(bot, update):
     update.message.chat.send_action(ChatAction.TYPING)
+    img = update.message.photo[-1]
+    img_size = img.file_size
 
-    image = update.message.photo[-1]
-    image_size = image.file_size
-
-    if image_size > MAX_FILESIZE_DOWNLOAD:
+    if img_size > MAX_FILESIZE_DOWNLOAD:
         return
 
-    image_id = image.file_id
-    image_file = bot.get_file(image_id)
-    image_path = image_file.file_path
+    image_id = img.file_id
+    img_file = bot.get_file(image_id)
+    img_path = img_file.file_path
 
-    if is_file_safe(bot, update, image_path, "img", image_id):
-        if image_size <= VISION_IMAGE_SIZE_LIMIT:
-            is_image_safe(bot, update, image_path, "img", image_id=image_id)
+    if is_file_safe(bot, update, img_path, "img", image_id):
+        if img_size <= VISION_IMAGE_SIZE_LIMIT:
+            is_image_safe(bot, update, img_path, "img", image_id=image_id)
         else:
-            update.message.reply_text("This photo can't be checked as it is too large for me to process.")
+            if update.message.chat.type == Chat.PRIVATE:
+                update.message.reply_text("This photo can't be checked as it is too large for me to process.")
 
 
 # Checks for url
