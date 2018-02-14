@@ -12,7 +12,7 @@ import string
 import time
 import urllib.parse
 
-from google.cloud import vision
+from google.cloud import datastore, vision
 from urlextract import URLExtract
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ChatMember, Chat, \
@@ -53,7 +53,7 @@ else:
     db_host = os.environ.get("DB_HOST")
     db_port = os.environ.get("DB_PORT")
 
-SCANNER_TOKEN = os.environ.get("ATTACHMENT_SCANNER_API_TOKEN")
+SCANNER_TOKEN = os.environ.get("ATTACHMENT_SCANNER_TOKEN")
 SCANNER_URL = "https://beta.attachmentscanner.com/requests"
 SAFE_BROWSING_TOKEN = os.environ.get("SAFE_BROWSING_TOKEN")
 SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
@@ -62,11 +62,13 @@ CHANNEL_NAME = "grpguardianbotdev"  # Channel username
 BOT_NAME = "grpguardianbot"  # Bot username
 
 VISION_IMAGE_SIZE_LIMIT = 4000000
-LIKELIHOOD_NAME = ("UNKNOWN", "VERY UNLIKELY", "UNLIKELY", "POSSIBLE", "LIKELY", "VERY LIKELY")
+SAFE_ANN_LIKELIHOODS = ("unknown", "very likely", "unlikely", "possible", "likely", "very likely")
+SAFE_ANN_TYPES = {0: "adult", 1: "spoof", 2: "medical", 3: "violence", 4: "racy"}
+SAFE_ANN_THRESHOLD = 3
 
 
 def main():
-    create_db_tables()
+    # create_db_tables()
 
     # Create the EventHandler and pass it your bot"s token.
     updater = Updater(TELEGRAM_TOKEN)
@@ -147,8 +149,8 @@ def help_msg(bot, update):
             "I can only handle photos up to 4 MB in size. Any files that have a size greater than the limits " \
             "will be ignored."
 
-    keyboard = [[InlineKeyboardButton("Join Channel", f"https://t.me/{CHANNEL_NAME}")],
-                [InlineKeyboardButton("Rate me", f"https://t.me/storebot?start={BOT_NAME}")]]
+    keyboard = [[InlineKeyboardButton("Join Channel", f"https://t.me/{CHANNEL_NAME}"),
+                 InlineKeyboardButton("Rate me", f"https://t.me/storebot?start={BOT_NAME}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     update.message.reply_text(text, reply_markup=reply_markup)
@@ -170,7 +172,7 @@ def group_greeting(bot, update):
         if user.id == bot.id:
             text = "Hello everyone! I am Group Guardian. Please set me as one of the admins so that I can start " \
                    "guarding your group."
-            update.message.reply_text(text)
+            bot.send_message(update.message.chat.id, text)
 
 
 # Checks for document
@@ -355,7 +357,7 @@ def is_file_safe(bot, update, file_path, file_type, file_id):
                 update.message.delete()
                 bot.send_message(chat_id, text, reply_markup=reply_markup)
             else:
-                update.message.reply_text("I think this contains threats. Don't download or open it.", quote=True)
+                update.message.reply_text("I think this contains threats, don't download or open it.", quote=True)
         else:
             if chat_type == Chat.PRIVATE:
                 update.message.reply_text("I think this doesn't contain threats.", quote=True)
@@ -375,72 +377,61 @@ def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=N
     image = vision.types.Image()
     image.source.image_uri = image_path
     response = client.safe_search_detection(image=image)
-    safe = response.safe_search_annotation
-    adult, spoof, medical, violence = safe.adult, safe.spoof, safe.medical, safe.violence
+    safe_ann = response.safe_search_annotation
+    safe_ann_results = [safe_ann.adult, safe_ann.spoof, safe_ann.medical, safe_ann.violence, safe_ann.racy]
 
-    if adult >= 3 or spoof >= 3 or medical >= 3 or violence >= 3:
+    if any(x > SAFE_ANN_THRESHOLD for x in safe_ann_results):
         safe_image = False
 
         if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
             if bot.get_chat_member(chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
+                text = "I found inappropriate content in here but I can't delete it until I am a group admin."
+                update.message.reply_text(text)
+
                 return
 
-            while True:
-                try:
-                    db = connect_db()
-                    break
-                except Exception:
-                    time.sleep(1)
-                    continue
-
-            cur = db.cursor()
-            cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, file_type, msg_text) values "
-                        "(%s, %s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, image_id, image_type, msg_text))
-            db.commit()
-            db.close()
+            client = datastore.Client()
+            key = client.key("ChatID", chat_id, "MsgID", msg_id)
+            entity = datastore.Entity(key)
+            entity.update({
+                "user_name": user_name,
+                "file_id": image_id,
+                "file_type": image_type,
+                "msg_text": msg_text
+            })
+            client.put(entity)
 
             if image_type == "doc":
                 text = "I deleted a document of photo that's "
             elif image_type == "img":
                 text = "I deleted a photo that's "
             else:
-                text = "I deleted a message that contains a photo link that's "
+                text = "I deleted a message which contains a link of photo that's "
 
-            if adult >= 3:
-                text += "{} to contain adult content, ".format(LIKELIHOOD_NAME[adult])
-            if spoof >= 3:
-                text += "{} to contain spoof content, ".format(LIKELIHOOD_NAME[spoof])
-            if medical >= 3:
-                text += "{} to contain medical content, ".format(LIKELIHOOD_NAME[medical])
-            if violence >= 3:
-                text += "{} to contain violence content, ".format(LIKELIHOOD_NAME[violence])
-            text += "which was sent by {}.".format(user_name)
+            safe_ann_index = next(x[0] for x in enumerate(safe_ann_results) if x[1] > SAFE_ANN_THRESHOLD)
+            safe_ann_value = safe_ann_results[safe_ann_index]
+            text += f"{SAFE_ANN_LIKELIHOODS[safe_ann_value]} to contain {SAFE_ANN_TYPES[safe_ann_index]} content "
+            text += f"(sent by {user_name})."
 
-            keyboard = [[InlineKeyboardButton(text="Undo", callback_data="undo," + str(msg_id))]]
+            keyboard = [[InlineKeyboardButton(text="Undo", callback_data=f"undo,{msg_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             update.message.delete()
             bot.send_message(chat_id, text, reply_markup=reply_markup)
         else:
             if is_image_url:
-                text = "%s\nThis link is " % image_path
+                text = f"{image_path}\nThis link is "
             else:
                 text = "This is "
 
-            if adult >= 3:
-                text += "{} to contain adult content, ".format(LIKELIHOOD_NAME[adult])
-            if spoof >= 3:
-                text += "{} to contain spoof content, ".format(LIKELIHOOD_NAME[spoof])
-            if medical >= 3:
-                text += "{} to contain medical content, ".format(LIKELIHOOD_NAME[medical])
-            if violence >= 3:
-                text += "{} to contain violence content, ".format(LIKELIHOOD_NAME[violence])
-            text = text.rstrip(", ") + "."
+            safe_ann_index = next(x[0] for x in enumerate(safe_ann_results) if x[1] > SAFE_ANN_THRESHOLD)
+            safe_ann_value = safe_ann_results[safe_ann_index]
+            text += f"{SAFE_ANN_LIKELIHOODS[safe_ann_value]} to contain {SAFE_ANN_TYPES[safe_ann_index]} content."
 
             update.message.reply_text(text, quote=True)
     else:
         if chat_type == Chat.PRIVATE:
-            update.message.reply_text("I think this does not contain any inappropriate content.", quote=True)
+            update.message.reply_text("I think this doesn't contain any inappropriate content.", quote=True)
 
     return safe_image
 

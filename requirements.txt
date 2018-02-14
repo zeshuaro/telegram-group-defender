@@ -1,4 +1,5 @@
 google-cloud-vision==0.30.0
+google-cloud-datastore==1.4.0
 psycopg2==2.7.3
 python-telegram-bot==9.0.0
 python-dotenv==0.7.1
