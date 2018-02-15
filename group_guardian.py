@@ -16,6 +16,7 @@ from urlextract import URLExtract
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, Chat, MessageEntity, ChatAction
 from telegram.constants import *
+from telegram.error import BadRequest
 from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackQueryHandler, Filters
 from telegram.ext.dispatcher import run_async
 
@@ -63,7 +64,7 @@ def main():
     dp.add_handler(MessageHandler(Filters.status_update.new_chat_members, group_greeting))
     dp.add_handler(MessageHandler((Filters.audio | Filters.document | Filters.photo | Filters.video), check_file))
     dp.add_handler(MessageHandler(Filters.entity(MessageEntity.URL), check_url))
-    dp.add_handler(CallbackQueryHandler(inline_button))
+    dp.add_handler(CallbackQueryHandler(inline_button_handler))
     dp.add_handler(feedback_cov_handler())
     dp.add_handler(CommandHandler("send", send, Filters.user(DEV_TELE_ID), pass_args=True))
 
@@ -426,7 +427,7 @@ def is_url_safe(bot, update, url, msg_text):
 
 # Handle inline button
 @run_async
-def inline_button(bot, update):
+def inline_button_handler(bot, update):
     query = update.callback_query
     chat_id = query.message.chat_id
     user_id = query.from_user.id
@@ -438,40 +439,41 @@ def inline_button(bot, update):
         return
 
     if task == "undo":
-        while True:
+        client = datastore.Client()
+        key = client.key("ChatID", chat_id, "MsgID", msg_id)
+        entity = client.get(key)
+
+        if entity:
+            user_name = entity["user_name"]
+            file_id = entity["file_id"]
+            file_type = entity["file_type"]
+            msg_text = entity["msg_text"]
+            client.delete(key)
+
             try:
-                db = connect_db()
-                break
-            except Exception:
-                time.sleep(1)
-                continue
+                query.message.delete()
+            except BadRequest:
+                return
 
-        cur = db.cursor()
-        cur.execute("select user_name, file_id, file_type, msg_text from msg_info where chat_id = %s and msg_id = %s",
-                    (chat_id, msg_id))
-        user_name, file_id, file_type, msg_text = cur.fetchone()
-        cur.execute("delete from msg_info where chat_id = %s and msg_id = %s", (chat_id, msg_id))
-        db.commit()
-        db.close()
+            keyboard = [[InlineKeyboardButton(text="Delete (No Undo)", callback_data="delete," + str(msg_id))]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
-        keyboard = [[InlineKeyboardButton(text="Delete (No Undo)", callback_data="delete," + str(msg_id))]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        query.message.delete()
-
-        if file_id:
-            if file_type == "img":
-                bot.send_photo(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
-            elif file_type == "aud":
-                bot.send_audio(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
-            elif file_type == "vid":
-                bot.send_video(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
+            if file_id:
+                if file_type == "img":
+                    bot.send_photo(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
+                elif file_type == "aud":
+                    bot.send_audio(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
+                elif file_type == "vid":
+                    bot.send_video(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
+                else:
+                    bot.send_document(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
             else:
-                bot.send_document(chat_id, file_id, caption="%s sent this." % user_name, reply_markup=reply_markup)
-        else:
-            bot.send_message(chat_id, "%s sent this:\n%s" % (user_name, msg_text), reply_markup=reply_markup)
+                bot.send_message(chat_id, f"{user_name} sent this:\n{msg_text}", reply_markup=reply_markup)
     elif task == "delete":
-        query.message.delete()
+        try:
+            query.message.delete()
+        except BadRequest:
+            pass
 
 
 # Return a random string
