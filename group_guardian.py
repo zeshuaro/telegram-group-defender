@@ -5,20 +5,17 @@ import dotenv
 import logging
 import mimetypes
 import os
-import psycopg2
 import random
 import requests
 import string
 import time
-import urllib.parse
 
 from google.cloud import datastore, vision
 from urlextract import URLExtract
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ChatMember, Chat, \
-    MessageEntity, ChatAction
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, Chat, MessageEntity, ChatAction
 from telegram.constants import *
-from telegram.ext import Updater, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, Filters
+from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackQueryHandler, Filters
 from telegram.ext.dispatcher import run_async
 
 from feedback_bot import feedback_cov_handler
@@ -37,22 +34,6 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN_BETA", os.environ.get("TELEGRAM_
 DEV_TELE_ID = int(os.environ.get("DEV_TELE_ID"))
 DEV_EMAIL = os.environ.get("DEV_EMAIL", "sample@email.com")
 
-if os.environ.get("DATABASE_URL"):
-    urllib.parse.uses_netloc.append("postgres")
-    db_url = urllib.parse.urlparse(os.environ["DATABASE_URL"])
-
-    db_name = db_url.path[1:]
-    db_user = db_url.username
-    db_pw = db_url.password
-    db_host = db_url.hostname
-    db_port = db_url.port
-else:
-    db_name = os.environ.get("DB_NAME")
-    db_user = os.environ.get("DB_USER")
-    db_pw = os.environ.get("DB_PW")
-    db_host = os.environ.get("DB_HOST")
-    db_port = os.environ.get("DB_PORT")
-
 SCANNER_TOKEN = os.environ.get("ATTACHMENT_SCANNER_TOKEN")
 SCANNER_URL = "https://beta.attachmentscanner.com/requests"
 SAFE_BROWSING_TOKEN = os.environ.get("SAFE_BROWSING_TOKEN")
@@ -63,7 +44,7 @@ BOT_NAME = "grpguardianbot"  # Bot username
 
 VISION_IMAGE_SIZE_LIMIT = 4000000
 SAFE_ANN_LIKELIHOODS = ("unknown", "very likely", "unlikely", "possible", "likely", "very likely")
-SAFE_ANN_TYPES = {0: "adult", 1: "spoof", 2: "medical", 3: "violence", 4: "racy"}
+SAFE_ANN_TYPES = ("adult", "spoof", "medical", "violence", "racy")
 SAFE_ANN_THRESHOLD = 3
 
 
@@ -80,10 +61,8 @@ def main():
     dp.add_handler(CommandHandler("help", help_msg))
     dp.add_handler(CommandHandler("donate", donate_msg))
     dp.add_handler(MessageHandler(Filters.status_update.new_chat_members, group_greeting))
-    dp.add_handler(MessageHandler(Filters.document, check_document))
-    dp.add_handler(MessageHandler(Filters.photo , check_image))
+    dp.add_handler(MessageHandler((Filters.audio | Filters.document | Filters.photo | Filters.video), check_file))
     dp.add_handler(MessageHandler(Filters.entity(MessageEntity.URL), check_url))
-    dp.add_handler(MessageHandler((Filters.audio | Filters.video), check_audio_video))
     dp.add_handler(CallbackQueryHandler(inline_button))
     dp.add_handler(feedback_cov_handler())
     dp.add_handler(CommandHandler("send", send, Filters.user(DEV_TELE_ID), pass_args=True))
@@ -106,27 +85,7 @@ def main():
     updater.idle()
 
 
-# Connects to database
-def connect_db():
-    return psycopg2.connect(database=db_name, user=db_user, password=db_pw, host=db_host, port=db_port)
-
-
-# Creates database tables
-def create_db_tables():
-    db = connect_db()
-    cur = db.cursor()
-
-    cur.execute("select * from information_schema.tables where table_name = 'msg_info'")
-    if not cur.fetchone():
-        # cur.execute("drop table msg_info")
-        cur.execute("create table msg_info (chat_id int, msg_id int, user_name text, file_id text, file_type text, "
-                    "msg_text text)")
-
-    db.commit()
-    db.close()
-
-
-# Sends start message
+# Send start message
 @run_async
 def start_msg(bot, update):
     text = "Welcome to Group Guardian!\n\n"
@@ -137,7 +96,7 @@ def start_msg(bot, update):
     update.message.reply_text(text)
 
 
-# Sends help message
+# Send help message
 @run_async
 def help_msg(bot, update):
     text = "If you are just chatting with me, simply send me any files or links and I will tell you if they and " \
@@ -156,7 +115,7 @@ def help_msg(bot, update):
     update.message.reply_text(text, reply_markup=reply_markup)
 
 
-# Sends donate message
+# Send donate message
 @run_async
 def donate_msg(bot, update):
     text = f"Want to help keep me online? Please donate to {DEV_EMAIL} through PayPal.\n\n" \
@@ -165,7 +124,7 @@ def donate_msg(bot, update):
     update.message.reply_text(text)
 
 
-# Greets when bot is added to group and asks for bot admin
+# Greet when bot is added to group and asks for bot admin
 @run_async
 def group_greeting(bot, update):
     for user in update.message.new_chat_members:
@@ -175,57 +134,47 @@ def group_greeting(bot, update):
             bot.send_message(update.message.chat.id, text)
 
 
-# Checks for document
-@run_async
-def check_document(bot, update):
-    update.message.chat.send_action(ChatAction.TYPING)
-    doc = update.message.document
-    doc_size = doc.file_size
+# Check for file
+def check_file(bot, update):
+    # Check if bot in group and if bot is a group admin, if not, files will not be checked
+    if update.message.chat.type in (Chat.GROUP, Chat.SUPERGROUP) and \
+            bot.get_chat_member(update.message.chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
+        update.message.reply_text("Please set me as a group admin so that I can start guarding files like this.")
 
-    if doc_size > MAX_FILESIZE_DOWNLOAD:
+    file_types = ("aud", "doc", "img", "vid")
+    file_type_names = {"aud": "audio", "doc": "document", "img": "image", "vid": "video"}
+
+    # Grab the received file
+    update.message.chat.send_action(ChatAction.TYPING)
+    files = [update.message.audio, update.message.document, update.message.photo, update.message.video]
+    index, file = next(x for x in enumerate(files) if x[1] is not None)
+    file_type = file_types[index]
+    file = file[-1] if file_type == "img" else file
+    file_size = file.file_size
+
+    # Check if file is too large for bot to download
+    if file_size > MAX_FILESIZE_DOWNLOAD:
         if update.message.chat.type == Chat.PRIVATE:
-            update.message.reply_text("Your document is too large for me to download and process, sorry.")
+            text = f"Your {file_type_names[file_type]} is too large for me to download and process, sorry."
+            update.message.reply_text(text)
 
         return
 
-    doc_id = doc.file_id
-    doc_mime_type = doc.mime_type
-    doc_file = bot.get_file(doc_id)
-    doc_path = doc_file.file_path
+    file_id = file.file_id
+    file_path = bot.get_file(file_id).file_path
 
-    if is_file_safe(bot, update, doc_path, "doc", doc_id):
-        if doc_mime_type.startswith("image"):
-            if doc_size <= VISION_IMAGE_SIZE_LIMIT:
-                is_image_safe(bot, update, doc_path, "doc", image_id=doc_id)
+    if is_file_safe(bot, update, file_path, file_id, file_type):
+        if file_type == "img" or file.mime_type.startswith("image"):
+            if file_size <= VISION_IMAGE_SIZE_LIMIT:
+                is_image_safe(bot, update, file_path, file_type, image_id=file_id)
             else:
                 if update.message.chat.type == Chat.PRIVATE:
-                    text = "This document of photo can't be checked as it is too large for me to process."
+                    text = f"This {file_type_names[file_type]} can't be checked for inappropriate content " \
+                           f"as it is too large for me to process."
                     update.message.reply_text(text)
 
 
-# Checks for image
-@run_async
-def check_image(bot, update):
-    update.message.chat.send_action(ChatAction.TYPING)
-    img = update.message.photo[-1]
-    img_size = img.file_size
-
-    if img_size > MAX_FILESIZE_DOWNLOAD:
-        return
-
-    image_id = img.file_id
-    img_file = bot.get_file(image_id)
-    img_path = img_file.file_path
-
-    if is_file_safe(bot, update, img_path, "img", image_id):
-        if img_size <= VISION_IMAGE_SIZE_LIMIT:
-            is_image_safe(bot, update, img_path, "img", image_id=image_id)
-        else:
-            if update.message.chat.type == Chat.PRIVATE:
-                update.message.reply_text("This photo can't be checked as it is too large for me to process.")
-
-
-# Checks for url
+# Check for url
 @run_async
 def check_url(bot, update):
     update.message.chat.send_action(ChatAction.TYPING)
@@ -280,34 +229,8 @@ def check_url(bot, update):
         update.message.reply_text(err_msg)
 
 
-# Checks for audio or video
-def check_audio_video(bot, update):
-    update.message.chat.send_action(ChatAction.TYPING)
-
-    audio, video = update.message.audio, update.message.video
-
-    if audio:
-        file_id = audio.file_id
-        file_size = audio.file_size
-
-        if file_size > MAX_FILESIZE_DOWNLOAD:
-            return
-
-        file_path = bot.get_file(file_id).file_path
-        is_file_safe(bot, update, file_path, "aud", file_id)
-    else:
-        file_id = video.file_id
-        file_size = video.file_size
-
-        if file_size > MAX_FILESIZE_DOWNLOAD:
-            return
-
-        file_path = bot.get_file(file_id).file_path
-        is_file_safe(bot, update, file_path, "vid", file_id)
-
-
-# Checks if a file is safe
-def is_file_safe(bot, update, file_path, file_type, file_id):
+# Check if a file is safe
+def is_file_safe(bot, update, file_path, file_id, file_type):
     safe_file = True
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
@@ -328,19 +251,16 @@ def is_file_safe(bot, update, file_path, file_type, file_id):
                 if bot.get_chat_member(chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
                     return
 
-                while True:
-                    try:
-                        db = connect_db()
-                        break
-                    except Exception:
-                        time.sleep(1)
-                        continue
-
-                cur = db.cursor()
-                cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, file_type, msg_text) values "
-                            "(%s, %s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, file_id, file_type, None))
-                db.commit()
-                db.close()
+                client = datastore.Client()
+                key = client.key("ChatID", chat_id, "MsgID", msg_id)
+                entity = datastore.Entity(key)
+                entity.update({
+                    "user_name": user_name,
+                    "file_id": file_id,
+                    "file_type": file_type,
+                    "msg_text": None
+                })
+                client.put(entity)
 
                 if file_type == "img":
                     text = "{} sent a photo but I deleted it as it contains threats.".format(user_name)
@@ -365,7 +285,7 @@ def is_file_safe(bot, update, file_path, file_type, file_id):
     return safe_file
 
 
-# Checks if image's content is safe
+# Check if image's content is safe
 def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=None, is_image_url=False):
     safe_image = True
     chat_id = update.message.chat_id
@@ -422,7 +342,7 @@ def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=N
             if is_image_url:
                 text = f"{image_path}\nThis link is "
             else:
-                text = "This is "
+                text = "I think this is "
 
             safe_ann_index = next(x[0] for x in enumerate(safe_ann_results) if x[1] > SAFE_ANN_THRESHOLD)
             safe_ann_value = safe_ann_results[safe_ann_index]
@@ -436,7 +356,7 @@ def is_image_safe(bot, update, image_path, image_type, image_id=None, msg_text=N
     return safe_image
 
 
-# Checks if url is safe
+# Check if url is safe
 def is_url_safe(bot, update, url, msg_text):
     safe_url = True
     chat_id = update.message.chat_id
@@ -496,7 +416,7 @@ def is_url_safe(bot, update, url, msg_text):
     return safe_url
 
 
-# Handles inline button
+# Handle inline button
 @run_async
 def inline_button(bot, update):
     query = update.callback_query
@@ -505,11 +425,9 @@ def inline_button(bot, update):
     task, msg_id = query.data.split(",")
     msg_id = int(msg_id)
 
-    if query.message.chat.type in (Chat.GROUP, Chat.SUPERGROUP):
-        member = bot.get_chat_member(chat_id, user_id)
-
-        if member.status not in (ChatMember.ADMINISTRATOR, ChatMember.CREATOR):
-            return
+    if query.message.chat.type in (Chat.GROUP, Chat.SUPERGROUP) and \
+            bot.get_chat_member(chat_id, user_id).status not in (ChatMember.ADMINISTRATOR, ChatMember.CREATOR):
+        return
 
     if task == "undo":
         while True:
@@ -548,16 +466,9 @@ def inline_button(bot, update):
         query.message.delete()
 
 
-# Returns a random string
+# Return a random string
 def random_string(length):
     return "".join(random.choice(string.ascii_letters + string.digits) for _ in range(length))
-
-
-# Cancels feedback opteration
-@run_async
-def cancel(bot, update):
-    update.message.reply_text("Operation cancelled.", reply_markup=ReplyKeyboardRemove())
-    return ConversationHandler.END
 
 
 # Send a message to a specified user
