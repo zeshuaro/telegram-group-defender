@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# coding: utf-8
+# -*- coding: utf-8 -*-
 
 import dotenv
 import logging
@@ -8,11 +8,9 @@ import os
 import random
 import requests
 import string
-import time
 import tempfile
 
 from google.cloud import datastore, vision
-from urlextract import URLExtract
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, Chat, MessageEntity, ChatAction
 from telegram.constants import *
@@ -27,8 +25,7 @@ logging.basicConfig(format="[%(asctime)s] [%(levelname)s] %(message)s", datefmt=
                     level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
-dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-dotenv.load_dotenv(dotenv_path)
+dotenv.load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 APP_URL = os.environ.get("APP_URL")
 PORT = int(os.environ.get("PORT", "5000"))
 
@@ -44,16 +41,14 @@ SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 CHANNEL_NAME = "grpguardianbotdev"  # Channel username
 BOT_NAME = "grpguardianbot"  # Bot username
 
-FILE_TYPE_NAMES = {"aud": "audio", "doc": "document", "img": "image", "vid": "video"}
+FILE_TYPE_NAMES = {"aud": "audio", "doc": "document", "img": "image", "vid": "video", "url": "URL"}
 VISION_IMAGE_SIZE_LIMIT = 4000000
 SAFE_ANN_THRESHOLD = 3
 
 
 def main():
-    # create_db_tables()
-
     # Create the EventHandler and pass it your bot"s token.
-    updater = Updater(TELEGRAM_TOKEN)
+    updater = Updater(TELEGRAM_TOKEN, request_kwargs={"connect_timeout": 20, "read_timeout": 20})
 
     # Get the dispatcher to register handlers
     dp = updater.dispatcher
@@ -163,11 +158,14 @@ def check_file(bot, update):
 
     file_id = file.file_id
     file_mime_type = "image" if file_type == "img" else file.mime_type
-    check_malware_and_vision(bot, update, file_type, file_mime_type, file_size, file_id)
+
+    _, text = is_malware_and_vision_safe(bot, update, file_type, file_mime_type, file_size, file_id)
+    if text:
+        update.message.reply_text(text, quote=True)
 
 
 # Master function for checking malware and vision
-def check_malware_and_vision(bot, update, file_type, file_mime_type, file_size, file_id=None, file_url=None):
+def is_malware_and_vision_safe(bot, update, file_type, file_mime_type, file_size, file_id=None, file_url=None):
     if file_id is None and file_url is None:
         raise ValueError("You must provide either file_id or file_url")
 
@@ -177,7 +175,12 @@ def check_malware_and_vision(bot, update, file_type, file_mime_type, file_size, 
     user_name = update.message.from_user.first_name
     msg_text = update.message.text
 
+    safe = True
+    reply_text = ""
+
     if not is_malware_safe(bot, file_id):
+        safe = False
+
         # Delete message if it is a group chat
         if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
             store_msg(chat_id, msg_id, user_name, file_id, file_type, msg_text)
@@ -189,11 +192,18 @@ def check_malware_and_vision(bot, update, file_type, file_mime_type, file_size, 
             update.message.delete()
             bot.send_message(chat_id, text, reply_markup=reply_markup)
         else:
-            update.message.reply_text("I think this contains threats, don't download or open it.", quote=True)
+            if file_url:
+                reply_text = f"{file_url}\n⬆I think it contains threats, don't download or open it."
+            else:
+                reply_text = "I think it contains threats, don't download or open it."
     else:
-        text = ""
+        if file_url:
+            reply_text = f"{file_url}\n"
+        else:
+            reply_text = ""
+
         if chat_type == Chat.PRIVATE:
-            text += "I think it doesn't contain threats. "
+            reply_text += "⬆I think it doesn't contain threats. "
 
         if file_type == "img" or file_mime_type.startswith("image"):
             if file_size <= VISION_IMAGE_SIZE_LIMIT:
@@ -202,6 +212,7 @@ def check_malware_and_vision(bot, update, file_type, file_mime_type, file_size, 
                 safe_ann_value = vision_results[safe_ann_index]
 
                 if not vision_safe:
+                    safe = False
                     safe_ann_likelihoods = ("unknown", "very likely", "unlikely", "possible", "likely", "very likely")
                     safe_ann_types = ("adult", "spoof", "medical", "violence", "racy")
 
@@ -222,30 +233,21 @@ def check_malware_and_vision(bot, update, file_type, file_mime_type, file_size, 
                         update.message.delete()
                         bot.send_message(chat_id, text, reply_markup=reply_markup)
                     else:
-                        if file_url:
-                            text += f"But I think this link ({file_url}) is "
-                        else:
-                            text += "But I think it is "
-
-                        text += f"{safe_ann_likelihoods[safe_ann_value]} to contain " \
-                                f"{safe_ann_types[safe_ann_index]} content."
-
-                        update.message.reply_text(text, quote=True)
+                        reply_text += f"But I think it is {safe_ann_likelihoods[safe_ann_value]} " \
+                                      f"to contain {safe_ann_types[safe_ann_index]} content."
                 else:
                     if chat_type == Chat.PRIVATE:
-                        text += "And I think it doesn't contain any inappropriate content."
-                        update.message.reply_text(text, quote=True)
+                        reply_text += "And I think it doesn't contain any inappropriate content."
             else:
                 if update.message.chat.type == Chat.PRIVATE:
-                    text = f"This {FILE_TYPE_NAMES[file_type]} is too large for me to check for inappropriate content."
-                    update.message.reply_text(text, quote=True)
-        else:
-            update.message.reply_text(text, quote=True)
+                    reply_text += "But it is too large for me to check for inappropriate content."
+
+    return safe, reply_text
 
 
 # Check if the file is malware safe
 def is_malware_safe(bot, file_id):
-    passed = True
+    safe = True
     url = "https://beta.attachmentscanner.com/requests"
     headers = {
         'accept': "application/json",
@@ -265,14 +267,14 @@ def is_malware_safe(bot, file_id):
     if response.status_code == 200:
         results = response.json()
         if "matches" in results and results["matches"]:
-            passed = False
+            safe = False
 
-    return passed
+    return safe
 
 
 # Check if the image is vision safe
 def is_vision_safe(bot, file_id):
-    passed = True
+    safe = True
 
     # Download file and open it for upload
     tf = tempfile.NamedTemporaryFile()
@@ -291,9 +293,9 @@ def is_vision_safe(bot, file_id):
     safe_ann_results = [safe_ann.adult, safe_ann.spoof, safe_ann.medical, safe_ann.violence, safe_ann.racy]
 
     if any(x > SAFE_ANN_THRESHOLD for x in safe_ann_results):
-        passed = False
+        safe = False
 
-    return passed, safe_ann_results
+    return safe, safe_ann_results
 
 
 # Store message information on Google Datastore
@@ -313,65 +315,61 @@ def store_msg(chat_id, msg_id, user_name, file_id, file_type, msg_text):
 # Check for url
 @run_async
 def check_url(bot, update):
+    # Check if bot in group and if bot is a group admin, if not, urls will not be checked
+    if update.message.chat.type in (Chat.GROUP, Chat.SUPERGROUP) and \
+            bot.get_chat_member(update.message.chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
+        update.message.reply_text("Please set me as a group admin so that I can start checking urls like this.")
+
     update.message.chat.send_action(ChatAction.TYPING)
-
-    msg_deleted = False
-    large_err = ""
-    download_err = ""
-
-    text = update.message.text
     chat_type = update.message.chat.type
-    extractor = URLExtract()
-    urls = extractor.find_urls(text)
+    chat_id = update.message.chat_id
+    msg_id = update.message.message_id
+    user_name = update.message.from_user.first_name
+    msg_text = update.message.text
+
+    entities = update.message.parse_entities([MessageEntity.URL])
+    urls = entities.values()
+    reply_text = ""
 
     for url in urls:
         mime_type = mimetypes.guess_type(url)[0]
-
-        if not mime_type or (mime_type and not mime_type.startswith("image")):
-            if not is_url_safe(bot, update, url, text) and chat_type in (Chat.GROUP, Chat.SUPERGROUP):
-                msg_deleted = True
-                break
-        elif mime_type.startswith("image"):
+        if mime_type:
             response = requests.get(url)
-
             if response.status_code == 200:
-                filename = random_string(20)
-                with open(filename, "wb") as f:
-                    f.write(response.content)
+                safe, text = is_malware_and_vision_safe(
+                    bot, update, "url", mime_type, len(response.content), file_url=url)
+                reply_text += text
 
-                if os.path.getsize(filename) <= VISION_IMAGE_SIZE_LIMIT:
-                    if not is_vision_safe(bot, update, url, "url", msg_text=text, is_image_url=True) and \
-                                    chat_type in (Chat.GROUP, Chat.SUPERGROUP):
-                        msg_deleted = True
-                        break
-                else:
-                    if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
-                        large_err = "Some of the photo links in this message are not checked as they are too large " \
-                                    "for me to process."
-                    else:
-                        update.message.reply_text("%s\nThis photo link can't be checked as it is too large for me to "
-                                                  "process." % url)
-                os.remove(filename)
+                if not safe:
+                    break
             else:
+                if chat_type == Chat.PRIVATE:
+                    reply_text += f"{url}\n⬆I couldn't check it as I couldn't access it."
+        else:
+            if not is_url_safe(url):
+                # Delete message if it is a group chat
                 if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
-                    download_err = "Some of the photo links in this message are not checked as I can't retrieve " \
-                                   "the photos."
-                else:
-                    update.message.reply_text("%s\nThis photo link can't be checked as I can't retrieve the photo." %
-                                              url)
+                    store_msg(chat_id, msg_id, user_name, None, "url", msg_text)
 
-    if not msg_deleted and (large_err or download_err):
-        err_msg = large_err + " " + download_err
-        update.message.reply_text(err_msg)
+                    text = f"I deleted a message that contains urls with threats (sent by {user_name})."
+                    keyboard = [[InlineKeyboardButton(text="Undo", callback_data=f"undo,{msg_id}")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    update.message.delete()
+                    bot.send_message(chat_id, text, reply_markup=reply_markup)
+                else:
+                    reply_text += f"{url}\n⬆I think it contains threats, don't open it."
+            else:
+                if chat_type == Chat.PRIVATE:
+                    reply_text += f"{url}\n⬆I think it is safe."
+
+    if chat_type == Chat.PRIVATE:
+        update.message.reply_text(reply_text, quote=True)
 
 
 # Check if url is safe
-def is_url_safe(bot, update, url, msg_text):
+def is_url_safe(url):
     safe_url = True
-    chat_id = update.message.chat_id
-    chat_type = update.message.chat.type
-    msg_id = update.message.message_id
-    user_name = update.message.from_user.first_name
 
     headers = {"Content-Type": "application/json"}
     params = {"key": SAFE_BROWSING_TOKEN}
@@ -389,38 +387,7 @@ def is_url_safe(bot, update, url, msg_text):
         results = response.json()
 
         if "matches" in results and results["matches"]:
-            if bot.get_chat_member(chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
-                return
-
             safe_url = False
-
-            if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
-                while True:
-                    try:
-                        db = connect_db()
-                        break
-                    except Exception:
-                        time.sleep(1)
-                        continue
-
-                cur = db.cursor()
-                cur.execute("insert into msg_info (chat_id, msg_id, user_name, file_id, file_type, msg_text) values "
-                            "(%s, %s, %s, %s, %s)", (chat_id, msg_id, user_name, None, None, msg_text))
-                db.commit()
-                db.close()
-
-                text = "{} sent a message but I deleted it as it contains a link with threats.".format(user_name)
-                keyboard = [[InlineKeyboardButton(text="Undo", callback_data="undo," + str(msg_id))]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                update.message.delete()
-                bot.send_message(chat_id, text, reply_markup=reply_markup)
-            else:
-                update.message.reply_text("%s\nThis link contains threats. I don't recommend you to click on it." % url,
-                                          quote=True)
-        else:
-            if chat_type == Chat.PRIVATE:
-                update.message.reply_text("%s\nI think this link is safe." % url, quote=True)
 
     return safe_url
 
