@@ -8,6 +8,7 @@ import os
 import requests
 import tempfile
 
+from datetime import datetime, timedelta, time
 from google.cloud import datastore, vision
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, Chat, MessageEntity, ChatAction
@@ -24,13 +25,8 @@ logging.basicConfig(format="[%(asctime)s] [%(levelname)s] %(message)s", datefmt=
 LOGGER = logging.getLogger(__name__)
 
 dotenv.load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-GCP_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
 PORT = int(os.environ.get("PORT", "5000"))
-
-if GCP_ID:
-    APP_URL = f"https://{GCP_ID}.appspot.com/"
-else:
-    APP_URL = os.environ.get("APP_URL")
+APP_URL = os.environ.get("APP_URL")
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN_BETA", os.environ.get("TELEGRAM_TOKEN"))
 DEV_TELE_ID = int(os.environ.get("DEV_TELE_ID"))
@@ -45,11 +41,15 @@ BOT_NAME = "grpguardianbot"  # Bot username
 FILE_TYPE_NAMES = {"aud": "audio", "doc": "document", "img": "image", "vid": "video", "url": "url"}
 VISION_IMAGE_SIZE_LIMIT = 4000000
 SAFE_ANN_THRESHOLD = 3
+MSG_LIFETIME = 1  # 1 day
 
 
 def main():
     # Create the EventHandler and pass it your bot"s token.
     updater = Updater(TELEGRAM_TOKEN, request_kwargs={"connect_timeout": 20, "read_timeout": 20})
+
+    job_queue = updater.job_queue
+    job_queue.run_repeating(delete_expired_msg, timedelta(days=MSG_LIFETIME), 0)
 
     # Get the dispatcher to register handlers
     dp = updater.dispatcher
@@ -80,6 +80,16 @@ def main():
     # SIGTERM or SIGABRT. This should be used most of the time, since
     # start_polling() is non-blocking and will stop the bot gracefully.
     updater.idle()
+
+
+def delete_expired_msg(bot, job):
+    curr_datetime = datetime.now()
+    client = datastore.Client()
+    query = client.query(kind="MsgID")
+    query.add_filter("expire", "<", curr_datetime)
+
+    for entity in query.fetch():
+        client.delete(entity.key)
 
 
 # Send start message
@@ -317,6 +327,7 @@ def is_vision_safe(bot, file_id, file_url):
 
 # Store message information on Google Datastore
 def store_msg(chat_id, msg_id, user_name, file_id, file_type, msg_text):
+    expire = datetime.now() + timedelta(days=MSG_LIFETIME)
     client = datastore.Client()
     key = client.key("ChatID", chat_id, "MsgID", msg_id)
     entity = datastore.Entity(key)
@@ -324,7 +335,8 @@ def store_msg(chat_id, msg_id, user_name, file_id, file_type, msg_text):
         "user_name": user_name,
         "file_id": file_id,
         "file_type": file_type,
-        "msg_text": msg_text
+        "msg_text": msg_text,
+        "expire": expire
     })
     client.put(entity)
 
@@ -455,6 +467,11 @@ def inline_button_handler(bot, update):
                     bot.send_document(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
             else:
                 bot.send_message(chat_id, f"{user_name} sent this:\n{msg_text}", reply_markup=reply_markup)
+        else:
+            try:
+                query.message.edit_text("Message is expired")
+            except BadRequest:
+                pass
     elif task == "delete":
         try:
             query.message.delete()
