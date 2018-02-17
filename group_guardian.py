@@ -195,7 +195,7 @@ def is_malware_and_vision_safe(bot, update, file_type, file_mime_type, file_size
             bot.send_message(chat_id, text, reply_markup=reply_markup)
         else:
             if file_url:
-                reply_text = f"{file_url}\n⬆I think it contains threats, don't download or open it."
+                reply_text = f"{file_url}\n⬆ I think it contains threats, don't download or open it."
             else:
                 reply_text = "I think it contains threats, don't download or open it."
     else:
@@ -205,7 +205,7 @@ def is_malware_and_vision_safe(bot, update, file_type, file_mime_type, file_size
             reply_text = ""
 
         if chat_type == Chat.PRIVATE:
-            reply_text += "⬆I think it doesn't contain threats. "
+            reply_text += "⬆ I think it doesn't contain threats. "
 
         if file_type == "img" or file_mime_type.startswith("image"):
             if file_size <= VISION_IMAGE_SIZE_LIMIT:
@@ -354,13 +354,13 @@ def check_url(bot, update):
             if response.status_code == 200:
                 safe, text = is_malware_and_vision_safe(
                     bot, update, "url", mime_type, len(response.content), file_url=url)
-                reply_text += text
+                reply_text += f"{text}\n\n"
 
-                if not safe:
+                if not safe and chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                     break
             else:
                 if chat_type == Chat.PRIVATE:
-                    reply_text += f"{url}\n⬆I couldn't check it as I couldn't access it."
+                    reply_text += f"{url}\n⬆ I couldn't check it as I couldn't access it.\n\n"
         else:
             if not is_url_safe(url):
                 # Delete message if it is a group chat
@@ -373,14 +373,15 @@ def check_url(bot, update):
 
                     update.message.delete()
                     bot.send_message(chat_id, text, reply_markup=reply_markup)
+                    break
                 else:
-                    reply_text += f"{url}\n⬆I think it contains threats, don't open it."
+                    reply_text += f"{url}\n⬆ I think it contains threats, don't open it.\n\n"
             else:
                 if chat_type == Chat.PRIVATE:
-                    reply_text += f"{url}\n⬆I think it is safe."
+                    reply_text += f"{url}\n⬆ I think it is safe.\n\n"
 
     if chat_type == Chat.PRIVATE:
-        update.message.reply_text(reply_text, quote=True)
+        update.message.reply_text(reply_text, quote=True, disable_web_page_preview=True)
 
 
 # Check if url is safe
