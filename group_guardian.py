@@ -5,9 +5,7 @@ import dotenv
 import logging
 import mimetypes
 import os
-import random
 import requests
-import string
 import tempfile
 
 from google.cloud import datastore, vision
@@ -458,11 +456,6 @@ def inline_button_handler(bot, update):
             query.message.delete()
         except BadRequest:
             pass
-
-
-# Return a random string
-def random_string(length):
-    return "".join(random.choice(string.ascii_letters + string.digits) for _ in range(length))
 
 
 # Send a message to a specified user
