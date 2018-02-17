@@ -39,7 +39,7 @@ SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 CHANNEL_NAME = "grpguardianbotdev"  # Channel username
 BOT_NAME = "grpguardianbot"  # Bot username
 
-FILE_TYPE_NAMES = {"aud": "audio", "doc": "document", "img": "image", "vid": "video", "url": "URL"}
+FILE_TYPE_NAMES = {"aud": "audio", "doc": "document", "img": "image", "vid": "video", "url": "url"}
 VISION_IMAGE_SIZE_LIMIT = 4000000
 SAFE_ANN_THRESHOLD = 3
 
@@ -83,8 +83,8 @@ def main():
 @run_async
 def start_msg(bot, update):
     text = "Welcome to Group Guardian!\n\n"
-    text += "I can protect you and your group from files or links that may contain threats, and photos or links of " \
-            "photos that may contain adult, spoof, medical or violence content.\n\n"
+    text += "I can protect you and your group from files or links that may contain threats, and photos or urls of " \
+            "photos that may contain adult, spoof, medical, violence or racy content.\n\n"
     text += "Type /help to see how to use me."
 
     update.message.reply_text(text)
@@ -93,14 +93,14 @@ def start_msg(bot, update):
 # Send help message
 @run_async
 def help_msg(bot, update):
-    text = "If you are just chatting with me, simply send me any files or links and I will tell you if they and " \
-           "their content (photos only) are safe and appropriate.\n\n"
-    text += "If you want me to guard your group, add me into your group and set me as an admin. I will check " \
-            "every file and link that is sent to the group and delete it if it is not safe.\n\n"
+    text = "If you're just chatting with me, simply send me a file or a url and I'll tell you if it is safe. " \
+           "If it is a photo, I'll also tell you if it is appropriate.\n\n"
+    text += "If you want me to guard your group, add me into your group and set me as an admin. " \
+            "I'll check every file and url sent to the group and delete it if it is not safe.\n\n"
     text += "As a group admin, you can choose to undo the message that I deleted to review it.\n\n"
     text += "Please note that I can only download files up to 20 MB in size. And for photo content checking, " \
             "I can only handle photos up to 4 MB in size. Any files that have a size greater than the limits " \
-            "will be ignored."
+            "will be ignored in groups."
 
     keyboard = [[InlineKeyboardButton("Join Channel", f"https://t.me/{CHANNEL_NAME}"),
                  InlineKeyboardButton("Rate me", f"https://t.me/storebot?start={BOT_NAME}")]]
