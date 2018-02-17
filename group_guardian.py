@@ -169,16 +169,18 @@ def is_malware_and_vision_safe(bot, update, file_type, file_mime_type, file_size
     if file_id is None and file_url is None:
         raise ValueError("You must provide either file_id or file_url")
 
+    # Setup return variables
+    safe = True
+    reply_text = ""
+
+    # Grab info from message
     chat_type = update.message.chat.type
     chat_id = update.message.chat_id
     msg_id = update.message.message_id
     user_name = update.message.from_user.first_name
     msg_text = update.message.text
 
-    safe = True
-    reply_text = ""
-
-    if not is_malware_safe(bot, file_id):
+    if not is_malware_safe(bot, file_id, file_url):
         safe = False
 
         # Delete message if it is a group chat
@@ -207,7 +209,7 @@ def is_malware_and_vision_safe(bot, update, file_type, file_mime_type, file_size
 
         if file_type == "img" or file_mime_type.startswith("image"):
             if file_size <= VISION_IMAGE_SIZE_LIMIT:
-                vision_safe, vision_results = is_vision_safe(bot, file_id)
+                vision_safe, vision_results = is_vision_safe(bot, file_id, file_url)
                 safe_ann_index = next((x[0] for x in enumerate(vision_results) if x[1] > SAFE_ANN_THRESHOLD), 0)
                 safe_ann_value = vision_results[safe_ann_index]
 
@@ -216,6 +218,7 @@ def is_malware_and_vision_safe(bot, update, file_type, file_mime_type, file_size
                     safe_ann_likelihoods = ("unknown", "very likely", "unlikely", "possible", "likely", "very likely")
                     safe_ann_types = ("adult", "spoof", "medical", "violence", "racy")
 
+                    # Delete message if it is a group chat
                     if chat_type in (Chat.GROUP, Chat.SUPERGROUP):
                         store_msg(chat_id, msg_id, user_name, file_id, file_type, msg_text)
 
@@ -246,24 +249,33 @@ def is_malware_and_vision_safe(bot, update, file_type, file_mime_type, file_size
 
 
 # Check if the file is malware safe
-def is_malware_safe(bot, file_id):
+def is_malware_safe(bot, file_id, file_url):
     safe = True
     url = "https://beta.attachmentscanner.com/requests"
-    headers = {
-        'accept': "application/json",
-        'authorization': f"bearer {SCANNER_TOKEN}"
-    }
 
-    # Download file and open it for upload
-    tf = tempfile.NamedTemporaryFile()
-    tf_name = tf.name
-    file = bot.get_file(file_id)
-    file.download(tf_name)
-    files = {"file": open(tf_name, "rb")}
-    tf.close()
+    if file_id:
+        # Download file and open it for upload
+        tf = tempfile.NamedTemporaryFile()
+        tf_name = tf.name
+        file = bot.get_file(file_id)
+        file.download(tf_name)
+        files = {"file": open(tf_name, "rb")}
+        tf.close()
 
-    # Make the request to check for malware
-    response = requests.post(url=url, headers=headers, files=files)
+        # Make the request to check for malware
+        headers = {
+            "accept": "application/json",
+            "authorization": f"bearer {SCANNER_TOKEN}"
+        }
+        response = requests.post(url=url, headers=headers, files=files)
+    else:
+        headers = {
+            "content-type": "application/json",
+            "authorization": f"bearer {SCANNER_TOKEN}"
+        }
+        json = {"url": file_url}
+        response = requests.post(url=url, headers=headers, json=json)
+
     if response.status_code == 200:
         results = response.json()
         if "matches" in results and results["matches"]:
@@ -273,21 +285,25 @@ def is_malware_safe(bot, file_id):
 
 
 # Check if the image is vision safe
-def is_vision_safe(bot, file_id):
+def is_vision_safe(bot, file_id, file_url):
     safe = True
 
-    # Download file and open it for upload
-    tf = tempfile.NamedTemporaryFile()
-    tf_name = tf.name
-    file = bot.get_file(file_id)
-    file.download(tf_name)
-    with open(tf_name, 'rb') as f:
-        content = f.read()
-    tf.close()
+    if file_id:
+        # Download file and open it for upload
+        tf = tempfile.NamedTemporaryFile()
+        tf_name = tf.name
+        file = bot.get_file(file_id)
+        file.download(tf_name)
+        with open(tf_name, 'rb') as f:
+            content = f.read()
+        tf.close()
 
-    # Use Google Vision to check image
+        image = vision.types.Image(content=content)
+    else:
+        image = vision.types.Image()
+        image.source.image_uri = file_url
+
     client = vision.ImageAnnotatorClient()
-    image = vision.types.Image(content=content)
     response = client.safe_search_detection(image=image)
     safe_ann = response.safe_search_annotation
     safe_ann_results = [safe_ann.adult, safe_ann.spoof, safe_ann.medical, safe_ann.violence, safe_ann.racy]
