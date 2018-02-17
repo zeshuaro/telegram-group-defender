@@ -24,17 +24,20 @@ logging.basicConfig(format="[%(asctime)s] [%(levelname)s] %(message)s", datefmt=
 LOGGER = logging.getLogger(__name__)
 
 dotenv.load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-APP_URL = os.environ.get("APP_URL")
+GCP_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
 PORT = int(os.environ.get("PORT", "5000"))
+
+if GCP_ID:
+    APP_URL = f"https://{GCP_ID}.appspot.com/"
+else:
+    APP_URL = os.environ.get("APP_URL")
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN_BETA", os.environ.get("TELEGRAM_TOKEN"))
 DEV_TELE_ID = int(os.environ.get("DEV_TELE_ID"))
 DEV_EMAIL = os.environ.get("DEV_EMAIL", "sample@email.com")
 
 SCANNER_TOKEN = os.environ.get("ATTACHMENT_SCANNER_TOKEN")
-SCANNER_URL = "https://beta.attachmentscanner.com/requests"
 SAFE_BROWSING_TOKEN = os.environ.get("SAFE_BROWSING_TOKEN")
-SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 
 CHANNEL_NAME = "grpguardianbotdev"  # Channel username
 BOT_NAME = "grpguardianbot"  # Bot username
@@ -386,6 +389,7 @@ def check_url(bot, update):
 def is_url_safe(url):
     safe_url = True
 
+    safe_browsing_url = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
     headers = {"Content-Type": "application/json"}
     params = {"key": SAFE_BROWSING_TOKEN}
     json = {
@@ -396,7 +400,7 @@ def is_url_safe(url):
             "threatEntries": [{"url": url}]
         }
     }
-    response = requests.post(url=SAFE_BROWSING_URL, headers=headers, params=params, json=json)
+    response = requests.post(url=safe_browsing_url, headers=headers, params=params, json=json)
 
     if response.status_code == 200:
         results = response.json()
