@@ -33,8 +33,8 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN_BETA", os.environ.get("TELEGRAM_
 DEV_TELE_ID = int(os.environ.get("DEV_TELE_ID"))
 DEV_EMAIL = os.environ.get("DEV_EMAIL", "sample@email.com")
 
-SCANNER_TOKEN = os.environ.get("ATTACHMENT_SCANNER_TOKEN")
-SAFE_BROWSING_TOKEN = os.environ.get("SAFE_BROWSING_TOKEN")
+SCANNER_TOKEN = os.environ.get("SCANNER_TOKEN")
+GOOGLE_TOKEN = os.environ.get("GOOGLE_TOKEN")
 
 if os.environ.get("DATABASE_URL"):
     urllib.parse.uses_netloc.append("postgres")
@@ -51,9 +51,6 @@ else:
     DB_PW = os.environ.get("DB_PW")
     DB_HOST = os.environ.get("DB_HOST")
     DB_PORT = os.environ.get("DB_PORT")
-
-CHANNEL_NAME = "grpguardianbotdev"  # Channel username
-BOT_NAME = "grpguardianbot"  # Bot username
 
 FILE_TYPE_NAMES = {"aud": "audio", "doc": "document", "img": "image", "vid": "video", "url": "url"}
 VISION_IMAGE_SIZE_LIMIT = 4000000
@@ -101,16 +98,17 @@ def main():
     updater.idle()
 
 
+# Connect to database
 def conn_db():
     return psycopg2.connect(database=DB_NAME, user=DB_USER, password=DB_PW, host=DB_HOST, port=DB_PORT)
 
 
+# Make database tables
 def make_db_tables():
     with conn_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("create table if not exists chat_info (chat_id bigint primary key)")
-            cur.execute("create table if not exists msg_info "
-                        "(chat_id bigint not null, msg_id bigint not null, primary key(chat_id, msg_id), "
+            cur.execute("create table if not exists msg_info ("
+                        "chat_id bigint not null, msg_id bigint not null, primary key(chat_id, msg_id), "
                         "user_name text, file_id text, file_type text, msg_text text, expire timestamptz)")
 
 
@@ -145,8 +143,8 @@ def help_msg(bot, update):
             "I can only handle photos up to 4 MB in size. Any files that have a size greater than the limits " \
             "will be ignored in groups."
 
-    keyboard = [[InlineKeyboardButton("Join Channel", f"https://t.me/{CHANNEL_NAME}"),
-                 InlineKeyboardButton("Rate me", f"https://t.me/storebot?start={BOT_NAME}")]]
+    keyboard = [[InlineKeyboardButton("Join Channel", "https://t.me/grpguardianbotdev"),
+                 InlineKeyboardButton("Rate me", "https://t.me/storebot?start=grpguardianbot")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     update.message.reply_text(text, reply_markup=reply_markup)
@@ -395,7 +393,7 @@ def is_url_safe(url):
 
     safe_browsing_url = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
     headers = {"Content-Type": "application/json"}
-    params = {"key": SAFE_BROWSING_TOKEN}
+    params = {"key": GOOGLE_TOKEN}
     json = {
         "threatInfo": {
             "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING"],
@@ -408,7 +406,6 @@ def is_url_safe(url):
 
     if response.status_code == 200:
         results = response.json()
-
         if "matches" in results and results["matches"]:
             safe_url = False
 
