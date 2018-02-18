@@ -5,10 +5,12 @@ import dotenv
 import logging
 import mimetypes
 import os
+import psycopg2
 import requests
+import urllib.parse
 
 from datetime import datetime, timedelta
-from google.cloud import datastore, vision
+from google.cloud import vision
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, Chat, MessageEntity, ChatAction
 from telegram.constants import *
@@ -34,6 +36,22 @@ DEV_EMAIL = os.environ.get("DEV_EMAIL", "sample@email.com")
 SCANNER_TOKEN = os.environ.get("ATTACHMENT_SCANNER_TOKEN")
 SAFE_BROWSING_TOKEN = os.environ.get("SAFE_BROWSING_TOKEN")
 
+if os.environ.get("DATABASE_URL"):
+    urllib.parse.uses_netloc.append("postgres")
+    DB_URL = urllib.parse.urlparse(os.environ["DATABASE_URL"])
+
+    DB_NAME = DB_URL.path[1:]
+    DB_USER = DB_URL.username
+    DB_PW = DB_URL.password
+    DB_HOST = DB_URL.hostname
+    DB_PORT = DB_URL.port
+else:
+    DB_NAME = os.environ.get("DB_NAME")
+    DB_USER = os.environ.get("DB_USER")
+    DB_PW = os.environ.get("DB_PW")
+    DB_HOST = os.environ.get("DB_HOST")
+    DB_PORT = os.environ.get("DB_PORT")
+
 CHANNEL_NAME = "grpguardianbotdev"  # Channel username
 BOT_NAME = "grpguardianbot"  # Bot username
 
@@ -44,6 +62,8 @@ MSG_LIFETIME = 1  # 1 day
 
 
 def main():
+    make_db_tables()
+
     # Create the EventHandler and pass it your bot"s token.
     updater = Updater(TELEGRAM_TOKEN, request_kwargs={"connect_timeout": 20, "read_timeout": 20})
 
@@ -81,15 +101,25 @@ def main():
     updater.idle()
 
 
+def conn_db():
+    return psycopg2.connect(database=DB_NAME, user=DB_USER, password=DB_PW, host=DB_HOST, port=DB_PORT)
+
+
+def make_db_tables():
+    with conn_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("create table if not exists chat_info (chat_id bigint primary key)")
+            cur.execute("create table if not exists msg_info "
+                        "(chat_id bigint not null, msg_id bigint not null, primary key(chat_id, msg_id), "
+                        "user_name text, file_id text, file_type text, msg_text text, expire timestamptz)")
+
+
 # Delete expired message
 def delete_expired_msg(bot, job):
     curr_datetime = datetime.now()
-    client = datastore.Client()
-    query = client.query(kind="MsgID")
-    query.add_filter("expire", "<", curr_datetime)
-
-    for entity in query.fetch():
-        client.delete(entity.key)
+    with conn_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("delete from msg_info where expire < %s",  (curr_datetime,))
 
 
 # Send start message
@@ -298,17 +328,10 @@ def is_vision_safe(file_url):
 # Store message information on Google Datastore
 def store_msg(chat_id, msg_id, user_name, file_id, file_type, msg_text):
     expire = datetime.now() + timedelta(days=MSG_LIFETIME)
-    client = datastore.Client()
-    key = client.key("ChatID", chat_id, "MsgID", msg_id)
-    entity = datastore.Entity(key)
-    entity.update({
-        "user_name": user_name,
-        "file_id": file_id,
-        "file_type": file_type,
-        "msg_text": msg_text,
-        "expire": expire
-    })
-    client.put(entity)
+    with conn_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("insert into msg_info values (%s, %s, %s, %s, %s, %s, %s)",
+                        (chat_id, msg_id, user_name, file_id, file_type, msg_text, expire))
 
 
 # Check for url
@@ -406,41 +429,49 @@ def inline_button_handler(bot, update):
         return
 
     if task == "undo":
-        client = datastore.Client()
-        key = client.key("ChatID", chat_id, "MsgID", msg_id)
-        entity = client.get(key)
+        with conn_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select user_name, file_id, file_type, msg_text from msg_info "
+                            "where chat_id = %s and msg_id = %s", (chat_id, msg_id))
+                row = cur.fetchone()
 
-        if entity:
-            user_name = entity["user_name"]
-            file_id = entity["file_id"]
-            file_type = entity["file_type"]
-            msg_text = entity["msg_text"]
-            client.delete(key)
+                if row:
+                    user_name, file_id, file_type, msg_text = row
+                    cur.execute("delete from msg_info where chat_id = %s and msg_id = %s", (chat_id, msg_id))
 
-            try:
-                query.message.delete()
-            except BadRequest:
-                return
+                    try:
+                        query.message.delete()
+                    except BadRequest:
+                        return
 
-            keyboard = [[InlineKeyboardButton(text="Delete (No Undo)", callback_data="delete," + str(msg_id))]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+                    keyboard = [[InlineKeyboardButton(text="Delete (No Undo)", callback_data="delete," + str(msg_id))]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
 
-            if file_id:
-                if file_type == "img":
-                    bot.send_photo(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
-                elif file_type == "aud":
-                    bot.send_audio(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
-                elif file_type == "vid":
-                    bot.send_video(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
+                    if file_id:
+                        if file_type == "img":
+                            bot.send_photo(chat_id, file_id,
+                                           caption=f"{user_name} sent this.",
+                                           reply_markup=reply_markup)
+                        elif file_type == "aud":
+                            bot.send_audio(chat_id, file_id,
+                                           caption=f"{user_name} sent this.",
+                                           reply_markup=reply_markup)
+                        elif file_type == "vid":
+                            bot.send_video(chat_id, file_id,
+                                           caption=f"{user_name} sent this.",
+                                           reply_markup=reply_markup)
+                        else:
+                            bot.send_document(chat_id, file_id,
+                                              caption=f"{user_name} sent this.",
+                                              reply_markup=reply_markup)
+                    else:
+                        bot.send_message(chat_id, f"{user_name} sent this:\n{msg_text}",
+                                         reply_markup=reply_markup)
                 else:
-                    bot.send_document(chat_id, file_id, caption=f"{user_name} sent this.", reply_markup=reply_markup)
-            else:
-                bot.send_message(chat_id, f"{user_name} sent this:\n{msg_text}", reply_markup=reply_markup)
-        else:
-            try:
-                query.message.edit_text("Message is expired")
-            except BadRequest:
-                pass
+                    try:
+                        query.message.edit_text("Message has expired")
+                    except BadRequest:
+                        pass
     elif task == "delete":
         try:
             query.message.delete()
