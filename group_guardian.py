@@ -177,6 +177,8 @@ def check_file(bot, update):
             bot.get_chat_member(update.message.chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
         update.message.reply_text("Please set me as a group admin so that I can start checking files like this.")
 
+        return
+
     # Grab the received file
     update.message.chat.send_action(ChatAction.TYPING)
     files = [update.message.document, update.message.audio, update.message.video, update.message.photo]
@@ -339,6 +341,8 @@ def check_url(bot, update):
     if update.message.chat.type in (Chat.GROUP, Chat.SUPERGROUP) and \
             bot.get_chat_member(update.message.chat_id, bot.id).status != ChatMember.ADMINISTRATOR:
         update.message.reply_text("Please set me as a group admin so that I can start checking urls like this.")
+
+        return
 
     update.message.chat.send_action(ChatAction.TYPING)
     chat_type = update.message.chat.type
