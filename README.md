@@ -55,6 +55,6 @@ DB_USER=<database_username>
 DB_PW=<database_password>
 DB_HOST=<database_host>
 DB_PORT=<database_port>
-SAFE_BROWSING_TOKEN=<safe_browsing_token>
+GOOGLE_TOKEN=<safe_browsing_token>
 SCANNER_TOKEN=<scanner_token>
 ```
