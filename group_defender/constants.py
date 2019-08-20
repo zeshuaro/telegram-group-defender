@@ -1,4 +1,3 @@
-VISION_IMAGE_SIZE_LIMIT = 4000000
 MSG_LIFETIME = 1  # 1 day
 TIMEOUT = 20
 
@@ -30,9 +29,13 @@ PENDING = 'pending'
 FAILED = 'failed'
 
 # Google Vision constants
-SAFE_ANN_LIKELIHOODS = ['unknown', 'very unlikely', 'unlikely', 'possible', 'likely', 'very likely']
-SAFE_ANN_TYPES = ['adult', 'spoof', 'medical', 'violence', 'racy']
-SAFE_ANN_THRESHOLD = 3
+GCP_LIKELIHOODS = ['unknown', 'very unlikely', 'unlikely', 'possible', 'likely', 'very likely']
+GCP_THRESHOLD = 3
+GCP_LIMIT = 1
+
+# Azure Content Moderator constants
+AZURE_LIMIT = 4950
+AZURE_THRESHOLD = 0.5
 
 # Google Datastore constants
 MSG = 'Message'
@@ -43,6 +46,13 @@ MSG_TEXT = 'message_text'
 EXPIRY = 'expiry'
 SETTING = 'Setting'
 VALUE = 'value'
+API_COUNT = 'API_Count'
+NAME = 'name'
+YEAR = 'year'
+MONTH = 'month'
+COUNT = 'count'
+GCP = 'gcp'
+AZURE = 'azure'
 
 # Inline keyboard constants
 UNDO = 'undo'
