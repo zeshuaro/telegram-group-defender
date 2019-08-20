@@ -4,6 +4,7 @@ from azure.cognitiveservices.vision.contentmoderator import ContentModeratorClie
 from datetime import date
 from dotenv import load_dotenv
 from google.cloud import vision, datastore
+from logbook import Logger
 from msrest.authentication import CognitiveServicesCredentials
 from telegram import Chat, ChatAction
 
@@ -47,7 +48,8 @@ def check_photo(update, context, file_id, file_name):
             if chat_type == Chat.PRIVATE:
                 update.message.reply_text('I think it doesn\'t contain any NSFW content.', quote=True)
     else:
-        update.message.reply_text('Photo scanning is currently unavailable.', quote=True)
+        if chat_type == Chat.PRIVATE:
+            update.message.reply_text('Photo scanning is currently unavailable.', quote=True)
 
     return is_safe
 
@@ -73,6 +75,9 @@ def scan_photo(file_name=None, file_url=None):
     elif AZURE not in entities or entities[AZURE] <= AZURE_LIMIT:
         is_safe, likelihood = azure_scan(file_name, file_url)
         update_api_count(client, AZURE, curr_year, curr_month)
+    else:
+        log = Logger()
+        log.warn('Vision scan tokens exhausted')
 
     return is_safe, likelihood
 

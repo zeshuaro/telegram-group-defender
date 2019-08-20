@@ -1,3 +1,5 @@
+import secrets
+
 from datetime import datetime, timedelta
 from google.cloud import datastore
 from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup
@@ -49,13 +51,17 @@ def process_msg(update, context):
 
     if query.message.chat.type in (Chat.GROUP, Chat.SUPERGROUP) and \
             context.bot.get_chat_member(chat_id, user_id).status not in (ChatMember.ADMINISTRATOR, ChatMember.CREATOR):
+        context.bot.send_message(user_id, 'You can\'t perform this action as you\'re not a group admin.')
+
         return
 
     task, msg_id = query.data.split(",")
     msg_id = int(msg_id)
 
     if task == UNDO:
-        restore_msg(context, query, chat_id, msg_id)
+        if (chat_id, msg_id) not in context.chat_data:
+            context.chat_data[chat_id, msg_id] = None
+            restore_msg(context, query, chat_id, msg_id)
     elif task == DELETE:
         try:
             query.message.delete()
@@ -94,6 +100,9 @@ def restore_msg(context, query, chat_id, msg_id):
         msg_text = msg[MSG_TEXT]
 
         keyboard = [[InlineKeyboardButton(text="Delete (Cannot be undone)", callback_data=f'{DELETE},{msg_id}')]]
+        if secrets.randbelow(2):
+            keyboard.append([InlineKeyboardButton('Support Group Defender', callback_data=PAYMENT)])
+
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         if file_id is not None:
@@ -113,6 +122,11 @@ def restore_msg(context, query, chat_id, msg_id):
             query.message.edit_text("Message has expired")
         except BadRequest:
             pass
+
+    try:
+        del context.chat_data[chat_id, msg_id]
+    except KeyError:
+        pass
 
 
 def delete_expired_msg(_):

@@ -71,16 +71,16 @@ def check_url(update, context):
                     ordinals.append(p.ordinal(i + 1))
 
             if len(urls) == 1:
-                update.message.reply_text(f'I think the link contains {content}, don\'t open it.')
+                update.message.reply_text(f'I think the link contains {content}, don\'t open it.', quote=True)
             else:
                 update.message.reply_text(f'I think the {", ".join(ordinals)} links contain a virus or malware or '
-                                          f'NSFW content, don\'t open them.')
+                                          f'NSFW content, don\'t open them.', quote=True)
     else:
         if chat_type == Chat.PRIVATE:
             if len(active_urls) == 0:
-                update.message.reply_text('I couldn\'t check the link(s) as they are unavailable.')
+                update.message.reply_text('I couldn\'t check the link(s) as they are unavailable.', quote=True)
             else:
-                update.message.reply_text('I think the link(s) are safe.')
+                update.message.reply_text('I think the link(s) are safe.', quote=True)
 
 
 def get_active_urls(urls):
@@ -163,20 +163,23 @@ def check_file_photo(urls):
     photo_safe_list = []
 
     for url in urls:
-        mime_type = mimetypes.guess_type(url)
-        if mime_type[0] is not None:
-            if not scan_file(file_url=url)[0]:
-                is_file_safe = False
-                file_safe_list.append(False)
-            else:
-                file_safe_list.append(True)
-
-            if is_file_safe and mime_type[0].startswith('image'):
+        mime_type = mimetypes.guess_type(url)[0]
+        if mime_type is not None:
+            if mime_type.startswith('image'):
                 if not scan_photo(file_url=url)[0]:
                     is_photo_safe = False
                     photo_safe_list.append(False)
                 else:
                     photo_safe_list.append(True)
+
+            if is_photo_safe:
+                if not scan_file(file_url=url)[0]:
+                    is_file_safe = False
+                    file_safe_list.append(False)
+                else:
+                    file_safe_list.append(True)
+            else:
+                file_safe_list = [True] * len(urls)
 
     if not is_file_safe or not is_photo_safe:
         safe_list = [a if not a else b for a, b in zip(file_safe_list, photo_safe_list)]
